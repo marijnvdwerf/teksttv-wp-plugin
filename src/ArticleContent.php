@@ -214,9 +214,10 @@ final class ArticleContent
         return isset(self::$missing_images[$id]) && !self::image_filters_active() ? null : Helpers::get_image_data($id, 'large', $slot);
     }
 
+    /** Positive integer IDs only: '12.5' or '1e3' from corrupt meta must not resolve to another attachment. */
     private static function attachment_id(mixed $raw): int
     {
-        return is_numeric($raw) ? max(0, (int) $raw) : 0;
+        return is_int($raw) || is_string($raw) ? max(0, (int) filter_var($raw, FILTER_VALIDATE_INT)) : 0;
     }
 
     private static function image_filters_active(): bool

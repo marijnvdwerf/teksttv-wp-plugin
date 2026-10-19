@@ -51,7 +51,7 @@ class ArticleContentTest extends TestCase
 
     public function test_prepares_title_pages_and_image_data_in_saved_order(): void
     {
-        $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), [11], '00', 0.5, '-5', 11, 12, '13abc']];
+        $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), [11], '00', 0.5, '-5', '12.5', true, 11, 12, '13abc']];
         $this->meta['_teksttv_content'] = "Eerste\n---\nTweede";
         $article = ArticleContent::prepare($this->post);
         $this->assertSame('Eigen kop', $article['title']);
@@ -265,65 +265,6 @@ class ArticleContentTest extends TestCase
         $this->assertSame($expected, ArticleContent::split_pages($content));
     }
 
-    public function test_sidebar_image_override_with_explicit_none(): void
-    {
-        $this->meta['_teksttv_sidebar_image'] = '0';
-        // Without the suppression, the featured image would be the fallback.
-        Functions\when('get_post_thumbnail_id')->justReturn(77);
-
-        $result = ArticleContent::get_sidebar_image_data(1);
-        $this->assertNull($result);
-    }
-
-    public function test_sidebar_image_override_with_integer_zero(): void
-    {
-        $this->meta['_teksttv_sidebar_image'] = 0;
-        // Without the suppression, the featured image would be the fallback.
-        Functions\when('get_post_thumbnail_id')->justReturn(77);
-
-        $result = ArticleContent::get_sidebar_image_data(1);
-        $this->assertNull($result);
-    }
-
-    public function test_sidebar_image_custom_override(): void
-    {
-        $this->meta['_teksttv_sidebar_image'] = '42';
-        Functions\when('wp_get_attachment_image_url')->alias(fn($id, $size) => $id === 42 && $size === 'large' ? 'https://example.com/custom.jpg' : false);
-
-        $result = ArticleContent::get_sidebar_image_data(1);
-        $this->assertSame('https://example.com/custom.jpg', $result['url']);
-    }
-
-    public function test_sidebar_image_falls_back_to_category_image(): void
-    {
-        $this->meta['_teksttv_sidebar_image'] = '';
-
-        Functions\when('get_the_terms')->alias(fn($id, $taxonomy) => $id === 1 && $taxonomy === 'category' ? [(object) ['term_id' => 10], (object) ['term_id' => 20]] : false);
-        Functions\expect('get_term_meta')
-            ->with(10, '_teksttv_category_image', true)
-            ->andReturn('55');
-        Functions\when('wp_get_attachment_image_url')->alias(fn($id, $size) => $id === 55 && $size === 'large' ? 'https://example.com/cat.jpg' : false);
-
-        $result = ArticleContent::get_sidebar_image_data(1);
-        $this->assertSame('https://example.com/cat.jpg', $result['url']);
-    }
-
-    public function test_sidebar_image_falls_back_to_post_thumbnail(): void
-    {
-        $this->meta['_teksttv_sidebar_image'] = '';
-
-        Functions\when('get_the_terms')->alias(fn($id, $taxonomy) => $id === 1 && $taxonomy === 'category' ? [(object) ['term_id' => 10]] : false);
-        Functions\expect('get_term_meta')
-            ->with(10, '_teksttv_category_image', true)
-            ->andReturn('');
-
-        Functions\when('get_post_thumbnail_id')->alias(fn($id) => $id === 1 ? 77 : 0);
-        Functions\when('wp_get_attachment_image_url')->alias(fn($id, $size) => $id === 77 && $size === 'large' ? 'https://example.com/thumb.jpg' : false);
-
-        $result = ArticleContent::get_sidebar_image_data(1);
-        $this->assertSame('https://example.com/thumb.jpg', $result['url']);
-    }
-
     /** @return iterable<string, array{mixed, mixed, mixed}> */
     public static function corruptSidebarIds(): iterable
     {
@@ -355,26 +296,31 @@ class ArticleContentTest extends TestCase
         $this->assertNull(ArticleContent::get_sidebar_image_data(1));
     }
 
-    public function test_sidebar_image_returns_null_when_nothing_found(): void
+    /** @return iterable<string, array{mixed, mixed, array<int, string>, int, int|null}> */
+    public static function sidebarSources(): iterable
     {
-        $this->meta['_teksttv_sidebar_image'] = '';
-        Functions\when('get_post_thumbnail_id')->justReturn(0);
-
-        $result = ArticleContent::get_sidebar_image_data(1);
-        $this->assertNull($result);
+        // Override, filtered primary category, category images by term ID, thumbnail ID, expected image ID.
+        yield 'explicit none' => ['0', '', [], 77, null];
+        yield 'integer zero' => [0, '', [], 77, null];
+        yield 'custom override' => ['42', 10, [10 => '88'], 77, 42];
+        yield 'primary category first' => ['', 10, [10 => '88', 20 => '55'], 77, 88];
+        yield 'first category with an image' => ['', '', [10 => '', 20 => '55'], 77, 55];
+        yield 'featured image' => ['', '', [10 => ''], 77, 77];
+        yield 'nothing' => ['', '', [], 0, null];
     }
 
-    public function test_sidebar_image_primary_category_takes_precedence(): void
+    /** @param array<int, string> $category_images */
+    #[DataProvider('sidebarSources')]
+    public function test_sidebar_image_fallback_order(mixed $override, mixed $primary, array $category_images, int $thumbnail, ?int $expected): void
     {
-        $this->meta['_teksttv_sidebar_image'] = '';
-
-        Functions\expect('get_term_meta')
-            ->with(10, '_teksttv_category_image', true)
-            ->andReturn('88');
-        Functions\when('wp_get_attachment_image_url')->alias(fn($id, $size) => $id === 88 && $size === 'large' ? 'https://example.com/primary.jpg' : false);
-        Functions\when('apply_filters')->alias(fn($tag, $value) => $tag === 'teksttv_primary_category' ? 10 : $value);
+        $this->meta['_teksttv_sidebar_image'] = $override;
+        $terms = array_map(fn($id) => (object) ['term_id' => $id], array_keys($category_images));
+        Functions\when('get_the_terms')->justReturn($primary === '' ? $terms : array_slice($terms, 1));
+        Functions\when('get_term_meta')->alias(fn($term_id) => $category_images[$term_id] ?? '');
+        Functions\when('get_post_thumbnail_id')->justReturn($thumbnail);
+        Functions\when('apply_filters')->alias(fn($tag, $value) => $tag === 'teksttv_primary_category' ? $primary : $value);
 
         $result = ArticleContent::get_sidebar_image_data(1);
-        $this->assertSame('https://example.com/primary.jpg', $result['url']);
+        $this->assertSame($expected === null ? null : 'https://example.com/' . $expected . '.jpg', $result['url'] ?? null);
     }
 }

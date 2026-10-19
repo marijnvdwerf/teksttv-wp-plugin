@@ -21,6 +21,8 @@ class RssFeedTest extends TestCase
 
     private int $revision = 0;
 
+    private int $writes = 0;
+
     protected function tearDown(): void
     {
         unset($_SERVER['REQUEST_TIME']);
@@ -31,8 +33,11 @@ class RssFeedTest extends TestCase
     {
         parent::setUp();
         (new \ReflectionProperty(RssFeed::class, 'namespace_rendered'))->setValue(null, false);
-        (new \ReflectionProperty(RssFeed::class, 'changed_blogs'))->setValue(null, []);
-        Functions\when('get_current_blog_id')->justReturn(1);
+        Functions\when('update_option')->alias(function ($key, $value) {
+            $this->revision = $value;
+            $this->writes++;
+            return true;
+        });
         $this->features = [...Helpers::DEFAULT_FEATURES, 'rss_feed'];
         $this->meta = ['_teksttv_active' => '1', '_teksttv_content' => 'Eerste slide'];
         $this->post = self::makePost();
@@ -221,34 +226,22 @@ class RssFeedTest extends TestCase
         $this->assertSame('original', RssFeed::last_modified('original', 'GMT'));
     }
 
-    public function test_invalidation_writes_once_at_shutdown_past_core(): void
-    {
-        Functions\when('get_lastpostmodified')->justReturn('2026-10-19 10:01:00');
-        Functions\expect('update_option')->once()->with('teksttv_rss_modified', strtotime('2026-10-19 10:01:01 GMT'), false)->andReturn(true);
-        RssFeed::invalidate();
-        RssFeed::invalidate();
-        $this->assertSame(PHP_INT_MAX, has_action('shutdown', [RssFeed::class, 'save_revision']));
-        RssFeed::save_revision();
-    }
-
-    /** @return array<string, array{string, string, string}> */
+    /** @return array<string, array{string, string}> */
     public static function revisionWrites(): array
     {
         return [
-            'after older writes' => ['2026-10-01 12:00:00', '', '2026-10-19 10:00:01'],
-            'after a revision ahead of the clock' => ['2026-10-01 12:00:00', '2026-10-19 10:00:05', '2026-10-19 10:00:06'],
+            'one second past now' => ['', '2026-10-19 10:00:01'],
+            'never back after a revision ahead of the clock' => ['2026-10-19 10:00:05', '2026-10-19 10:00:05'],
         ];
     }
 
-    /** The revision never moves back, even after a burst left it ahead of the clock. */
     #[DataProvider('revisionWrites')]
-    public function test_revision_goes_past_every_served_validator(string $core, string $stored, string $expected): void
+    public function test_invalidation_stores_a_revision_past_every_served_validator(string $stored, string $expected): void
     {
         $this->revision = $stored === '' ? 0 : strtotime($stored . ' GMT');
-        Functions\when('get_lastpostmodified')->justReturn($core);
-        Functions\expect('update_option')->once()->with('teksttv_rss_modified', strtotime($expected . ' GMT'), false)->andReturn(true);
         RssFeed::invalidate();
-        RssFeed::save_revision();
+        RssFeed::invalidate();
+        $this->assertSame(strtotime($expected . ' GMT'), $this->revision);
     }
 
     /** @return array<string, array{string, string}> */
@@ -273,15 +266,9 @@ class RssFeedTest extends TestCase
         };
         $at($now);
         Functions\when('is_feed')->justReturn(true);
-        Functions\when('update_option')->alias(function ($key, $value) {
-            $this->revision = $value;
-            return true;
-        });
-        Functions\when('get_lastpostmodified')->justReturn($core_gmt);
 
         $before = RssFeed::last_modified($core_gmt, 'GMT');
         RssFeed::invalidate();
-        RssFeed::save_revision();
         $after = RssFeed::last_modified($core_gmt, 'GMT');
         $this->assertLessThanOrEqual($now_gmt, $after);
         $at($now + 1);
@@ -303,6 +290,9 @@ class RssFeedTest extends TestCase
         Functions\when('is_feed')->justReturn(true);
         $this->assertSame('no-cache', RssFeed::feed_headers([])['Cache-Control']);
         $this->assertSame('no-store', RssFeed::feed_headers(['Cache-Control' => 'no-store'])['Cache-Control']);
+        $this->assertSame('public, max-age=3600, no-cache', RssFeed::feed_headers(['Cache-Control' => 'public, max-age=3600'])['Cache-Control']);
+        $this->assertSame('No-Cache', RssFeed::feed_headers(['Cache-Control' => 'No-Cache'])['Cache-Control']);
+        $this->assertSame('no-cache="Set-Cookie", no-cache', RssFeed::feed_headers(['Cache-Control' => 'no-cache="Set-Cookie"'])['Cache-Control']);
         $this->features = Helpers::DEFAULT_FEATURES;
         $this->assertSame([], RssFeed::feed_headers([]));
     }
@@ -312,35 +302,6 @@ class RssFeedTest extends TestCase
         Functions\when('is_feed')->justReturn(true);
         $this->revision = strtotime('2026-10-19 10:30:00 GMT');
         $this->assertSame('2026-10-19 10:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
-    }
-
-    public function test_shutdown_writes_the_revision_of_each_changed_site(): void
-    {
-        $current = 2;
-        Functions\when('get_current_blog_id')->alias(function () use (&$current) {
-            return $current;
-        });
-        RssFeed::invalidate();
-        $current = 1;
-        RssFeed::invalidate();
-
-        $written = [];
-        Functions\when('get_lastpostmodified')->justReturn(false);
-        Functions\when('switch_to_blog')->alias(function ($id) use (&$current) {
-            $current = $id;
-            return true;
-        });
-        Functions\when('restore_current_blog')->alias(function () use (&$current) {
-            $current = 1;
-            return true;
-        });
-        Functions\when('update_option')->alias(function ($key, $value) use (&$current, &$written) {
-            $written[] = $current;
-            return true;
-        });
-        RssFeed::save_revision();
-        $this->assertSame([2, 1], $written);
-        $this->assertSame(1, $current);
     }
 
     /** @return array<string, array{string, string, string, bool}> */
@@ -363,7 +324,7 @@ class RssFeedTest extends TestCase
     {
         $this->post->post_type = $type;
         RssFeed::post_transitioned($new, $old, $this->post);
-        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
+        $this->assertSame($invalidates, $this->writes > 0);
     }
 
     /** @return array<string, array{string, string, bool}> */
@@ -383,13 +344,13 @@ class RssFeedTest extends TestCase
         Functions\when('get_post_type')->justReturn('post');
         Functions\when('get_post_status')->justReturn($status);
         RssFeed::terms_changed(42, $taxonomy);
-        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
+        $this->assertSame($invalidates, $this->writes > 0);
     }
 
     public function test_force_deletes_and_feed_options_are_hooked_but_unrelated_options_are_not(): void
     {
         RssFeed::init();
-        $this->assertNotFalse(has_action('before_delete_post'));
+        $this->assertNotFalse(has_action('after_delete_post'));
         $this->assertNotFalse(has_action('updated_post_meta', [RssFeed::class, 'post_meta_changed']));
         $this->assertNotFalse(has_action('edited_category', [RssFeed::class, 'invalidate']));
         $this->assertNotFalse(has_filter('pre_get_lastpostmodified'));
@@ -417,8 +378,8 @@ class RssFeedTest extends TestCase
         $draft = clone $published;
         $draft->post_status = 'draft';
         return [
-            'force delete of a published post' => ['before_delete_post', [42, $published], true],
-            'force delete of a draft' => ['before_delete_post', [42, $draft], false],
+            'force delete of a published post' => ['after_delete_post', [42, $published], true],
+            'force delete of a draft' => ['after_delete_post', [42, $draft], false],
             'category assignment' => ['set_object_terms', [42, [], [], 'category'], true],
             'tag removal' => ['deleted_term_relationships', [42, [], 'post_tag'], true],
             'other taxonomy' => ['set_object_terms', [42, [], [], 'region'], false],
@@ -437,7 +398,7 @@ class RssFeedTest extends TestCase
         Functions\when('get_post_type')->justReturn('post');
         Functions\when('get_post_status')->justReturn('publish');
         $callback(...$args);
-        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
+        $this->assertSame($invalidates, $this->writes > 0);
     }
 
     public function test_values_from_other_plugins_get_the_feed_validator(): void
@@ -470,14 +431,14 @@ class RssFeedTest extends TestCase
         Functions\when('get_post_type')->justReturn($type);
         Functions\when('get_post_status')->justReturn($status);
         RssFeed::post_meta_changed(['7'], $object_id, '_teksttv_title');
-        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
+        $this->assertSame($invalidates, $this->writes > 0);
     }
 
     public function test_untracked_post_meta_skips_the_post_lookup(): void
     {
         Functions\expect('get_post_type')->never();
         RssFeed::post_meta_changed(['7'], 42, '_edit_lock');
-        $this->assertFalse(has_action('shutdown', [RssFeed::class, 'save_revision']));
+        $this->assertSame(0, $this->writes);
     }
 
     /** @return array<string, array{string, bool}> */
@@ -499,6 +460,6 @@ class RssFeedTest extends TestCase
     public function test_meta_changes_invalidate_only_for_exported_keys(string $key, bool $invalidates): void
     {
         RssFeed::meta_changed(['7'], 42, $key);
-        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
+        $this->assertSame($invalidates, $this->writes > 0);
     }
 }

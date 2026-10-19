@@ -10,9 +10,6 @@ final class RssFeed
 
     private static bool $namespace_rendered = false;
 
-    /** @var array<int, true> Sites written to in this request, keyed by blog ID. */
-    private static array $changed_blogs = [];
-
     public static function init(): void
     {
         add_action('rss2_ns', [self::class, 'render_namespace']);
@@ -31,8 +28,8 @@ final class RssFeed
             add_action($action . '_term_meta', [self::class, 'meta_changed'], 10, 3);
         }
         add_action('transition_post_status', [self::class, 'post_transitioned'], 10, 3);
-        // Force deletes fire no status transition.
-        add_action('before_delete_post', static fn($post_id, $post) => self::post_transitioned('delete', $post->post_status, $post), 10, 2);
+        // Force deletes fire no status transition; invalidate once the row is gone.
+        add_action('after_delete_post', static fn($post_id, $post) => self::post_transitioned('delete', $post->post_status, $post), 10, 2);
         // Term changes without a post save change the feed's categories and the sidebar image.
         add_action('set_object_terms', static fn($post_id, $terms, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 4);
         add_action('deleted_term_relationships', static fn($post_id, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 3);
@@ -51,7 +48,7 @@ final class RssFeed
         }
 
         // Retain the revision while disabled: turning export off changes the XML too.
-        $timestamp = self::revision($modified);
+        $timestamp = max($modified ? (int) strtotime($modified . ' GMT') : 0, (int) get_option('teksttv_rss_modified', 0));
         $now = current_datetime();
         if (Helpers::has_feature('rss_feed')) {
             $timestamp = max($timestamp, $now->setTime(0, 0)->getTimestamp());
@@ -118,49 +115,26 @@ final class RssFeed
     }
 
     /**
-     * Defer one advance to shutdown, after the request's last write: a feed fetched between writes
-     * of one request (an editor save, an import) must not receive the validator of the final state.
+     * Every validator served so far is capped at its request's start and at now, so a revision
+     * one second ahead of now is newer than all of them, also for several writes within a second.
      */
     public static function invalidate(): void
     {
-        self::$changed_blogs[get_current_blog_id()] = true;
-        add_action('shutdown', [self::class, 'save_revision'], PHP_INT_MAX);
-    }
-
-    public static function save_revision(): void
-    {
-        foreach (array_keys(self::$changed_blogs) as $blog_id) {
-            // Only multisite has other blog IDs, so single sites never call switch_to_blog().
-            $switched = $blog_id !== get_current_blog_id();
-            if ($switched) {
-                switch_to_blog($blog_id);
-            }
-            // HTTP dates have second precision: go past every validator served up to this second,
-            // including midnight and expiry, so even writes within the same second advance it.
-            update_option('teksttv_rss_modified', max(time(), self::revision(get_lastpostmodified('gmt'))) + 1, false);
-            if ($switched) {
-                restore_current_blog();
-            }
-        }
-        self::$changed_blogs = [];
-    }
-
-    /** Later of core's GMT date and the stored revision, as a timestamp. */
-    private static function revision(string|false $modified): int
-    {
-        return max($modified ? (int) strtotime($modified . ' GMT') : 0, (int) get_option('teksttv_rss_modified', 0));
+        update_option('teksttv_rss_modified', max(time() + 1, (int) get_option('teksttv_rss_modified', 0)), false);
     }
 
     /**
-     * Validators alone allow heuristic freshness (RFC 9111), so make caches revalidate every poll.
+     * Validators alone allow heuristic freshness (RFC 9111), so make caches revalidate every poll;
+     * a stricter or explicit policy from another plugin keeps its directives.
      *
      * @param array<string, string> $headers
      * @return array<string, string>
      */
     public static function feed_headers(array $headers): array
     {
-        if (is_feed('rss2') && !is_comment_feed() && Helpers::has_feature('rss_feed')) {
-            $headers['Cache-Control'] ??= 'no-cache';
+        $cache = $headers['Cache-Control'] ?? '';
+        if (is_feed('rss2') && !is_comment_feed() && Helpers::has_feature('rss_feed') && !preg_match('/(^|,)\s*no-(cache|store)\s*(,|$)/i', $cache)) {
+            $headers['Cache-Control'] = ltrim($cache . ', no-cache', ', ');
         }
         return $headers;
     }

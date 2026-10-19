@@ -127,17 +127,13 @@ item: if its TekstTV fields disappear, remove that item's imported TekstTV
 version. Missing fields do not remove the ordinary RSS item. Items that leave
 the feed window need a retention policy on the receiving narrowcaster.
 
-RSS 2.0 feeds answer ETag and Last-Modified conditional requests with 304 while
-unchanged. Validators advance, from the next second, when published posts are
-saved, unpublished or deleted; when the TekstTV features, maximum age, timezone
-or number of feed items change; on category, tag, TekstTV field, featured image
-or Yoast primary category changes of published posts; and on category name,
-category image or attachment file changes. Only writes through WordPress APIs
-count, not direct SQL. While export is enabled they also advance at midnight in
-the site timezone and when a feed post reaches the maximum age. Other content
-follows WordPress's own validator, which misses changes such as the site title,
-tag names, author names or comment counts. CDNs may cache feeds but should
-revalidate on each poll.
+RSS 2.0 feeds answer conditional requests (ETag, Last-Modified) with 304 while
+unchanged and send `Cache-Control: no-cache`, so caches revalidate every poll.
+Writes through WordPress APIs that can change the TekstTV output of published
+posts, the TekstTV settings or category images advance the validators from the
+next second; while export is enabled, so do local midnight and posts reaching
+the maximum age. Direct SQL writes are not detected. Other feed content follows
+WordPress's own validator.
 
 ## REST API
 
