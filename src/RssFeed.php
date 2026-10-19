@@ -1,0 +1,124 @@
+<?php
+
+namespace TekstTV;
+
+use TekstTV\Blocks\Loop\ArticlesLoopBlock;
+
+final class RssFeed
+{
+    public const XML_NAMESPACE = 'https://github.com/oszuidwest/teksttv-wp-plugin/rss/1.0';
+
+    public static function init(): void
+    {
+        add_action('rss2_ns', [self::class, 'render_namespace']);
+        add_action('rss2_item', [self::class, 'render_item']);
+        add_action('pre_get_posts', [self::class, 'prepare_request']);
+        add_filter('wp_headers', [self::class, 'filter_headers']);
+    }
+
+    /**
+     * Core checks feed validators before wp_headers and may exit with a 304.
+     * Post modification dates cannot represent metadata or scheduling changes.
+     */
+    public static function prepare_request(\WP_Query $query): void
+    {
+        if (
+            $query->is_main_query() && $query->is_feed('rss2') && !$query->is_comment_feed
+            && Helpers::has_feature('rss_feed')
+        ) {
+            unset($_SERVER['HTTP_IF_NONE_MATCH'], $_SERVER['HTTP_IF_MODIFIED_SINCE']);
+        }
+    }
+
+    /**
+     * Re-evaluate publication rules on each poll, including after midnight.
+     *
+     * @param array<string, string|false> $headers
+     * @return array<string, string|false>
+     */
+    public static function filter_headers(array $headers): array
+    {
+        if (is_feed('rss2') && !is_comment_feed() && Helpers::has_feature('rss_feed')) {
+            $headers = array_merge($headers, wp_get_nocache_headers());
+            unset($headers['ETag']);
+            $headers['Last-Modified'] = false;
+        }
+
+        return $headers;
+    }
+
+    public static function render_namespace(): void
+    {
+        if (Helpers::has_feature('rss_feed') && !is_comment_feed()) {
+            echo ' xmlns:teksttv="' . esc_url(self::XML_NAMESPACE) . '"';
+        }
+    }
+
+    public static function render_item(): void
+    {
+        if (!Helpers::has_feature('rss_feed') || is_comment_feed()) {
+            return;
+        }
+
+        $post = get_post();
+        if (
+            !$post || $post->post_type !== 'post' || $post->post_status !== 'publish'
+            || $post->post_password !== ''
+            || get_post_meta($post->ID, '_teksttv_active', true) !== '1'
+        ) {
+            return;
+        }
+
+        if (Helpers::has_feature('scheduling')) {
+            $start = (string) get_post_meta($post->ID, '_teksttv_date_start', true);
+            $end = (string) get_post_meta($post->ID, '_teksttv_date_end', true);
+            $days = Helpers::normalize_days(get_post_meta($post->ID, '_teksttv_days', true));
+            if (!Helpers::is_within_date_range($start, $end) || !Helpers::is_allowed_on_day($days)) {
+                return;
+            }
+        }
+
+        $pages = ArticlesLoopBlock::split_pages((string) get_post_meta($post->ID, '_teksttv_content', true));
+        $images = [];
+        $attachment_ids = Helpers::has_feature('extra_images') ? get_post_meta($post->ID, '_teksttv_images', true) : [];
+        foreach (is_array($attachment_ids) ? $attachment_ids : [] as $attachment_id) {
+            $image = Helpers::get_image_data((int) $attachment_id, 'large', 'image_slide');
+            if ($image && !empty($image['url'])) {
+                $images[] = $image['url'];
+            }
+        }
+
+        // Image-only posts are valid TekstTV items too.
+        if ($pages === [] && $images === []) {
+            return;
+        }
+
+        $override = Helpers::has_feature('custom_title') ? get_post_meta($post->ID, '_teksttv_title', true) : '';
+        $title = !empty($override) ? (string) $override : get_the_title($post);
+        self::render_element('title', html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+
+        if ($pages !== []) {
+            $body = implode("\n<hr />\n", array_map('wpautop', $pages));
+            self::render_element('content', $body, true);
+            $image = ArticlesLoopBlock::get_sidebar_image_data($post->ID);
+            if ($image && !empty($image['url'])) {
+                self::render_element('image', $image['url']);
+            }
+        }
+
+        foreach ($images as $url) {
+            self::render_element('extraImage', $url);
+        }
+    }
+
+    /** Emit XML 1.0 text, including literal CDATA terminators and legacy control characters. */
+    private static function render_element(string $name, string $value, bool $cdata = false): void
+    {
+        $value = wp_check_invalid_utf8($value, true);
+        $value = preg_replace('/[^\x{9}\x{A}\x{D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u', '', $value) ?? '';
+        $encoded = $cdata ? '<![CDATA[' . str_replace(']]>', ']]]]><![CDATA[>', $value) . ']]>' : esc_xml($value);
+
+        // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed internal element names; XML-escaped text or safely split CDATA above.
+        echo "\t\t<teksttv:" . $name . '>' . $encoded . '</teksttv:' . $name . ">\n";
+    }
+}

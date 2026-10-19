@@ -69,6 +69,64 @@ If you need a different distribution, use a capability plugin.
 
 If no channels are stored, `tv1` is assumed.
 
+## RSS export
+
+Enable **TekstTV opnemen in RSS** under Tekst TV → Instellingen → RSS to add
+TekstTV fields to the existing RSS 2.0 post feeds, including category and tag
+feeds. This feature is off by default. Atom, legacy RSS and comment feeds are
+unchanged. The normal RSS fields and the WordPress feed selection/size remain
+unchanged; this does not export a channel's playlist or apply its block filters.
+
+The namespace URI is
+`https://github.com/oszuidwest/teksttv-wp-plugin/rss/1.0`. It identifies the XML
+vocabulary; it is not a feed endpoint. Consumers should select fields by this
+URI and local name, rather than relying on the `teksttv` prefix.
+
+```xml
+<rss version="2.0"
+     xmlns:teksttv="https://github.com/oszuidwest/teksttv-wp-plugin/rss/1.0">
+  <channel>
+    <!-- Normal RSS channel fields and item fields omitted here. -->
+    <item>
+      <teksttv:title>TekstTV-kop</teksttv:title>
+      <teksttv:content><![CDATA[<p>Eerste slide.</p>
+<hr />
+<p>Tweede slide.</p>]]></teksttv:content>
+      <teksttv:image>https://example.com/sidebar.jpg</teksttv:image>
+      <teksttv:extraImage>https://example.com/foto-1.jpg</teksttv:extraImage>
+      <teksttv:extraImage>https://example.com/foto-2.jpg</teksttv:extraImage>
+    </item>
+  </channel>
+</rss>
+```
+
+- Only published, non-password-protected posts with **TekstTV actief** enabled
+  receive TekstTV fields. If scheduling is enabled, their start/end dates
+  (inclusive) and allowed weekdays must match the current WordPress site date.
+  When scheduling is disabled, stored planning is ignored, as in the playout.
+- `title` uses the custom TekstTV title when that feature is enabled and a title
+  is set; otherwise it uses the post title.
+- `content` contains the TekstTV HTML with paragraphs, wrapped in CDATA. When
+  **Meerdere slides** is enabled, page separators become `<hr />` boundaries.
+- `image` is optional and uses the same sidebar image selection as the playout:
+  a custom override (or explicit suppression), category image, then featured
+  image. A disabled sidebar override feature ignores its stored overrides.
+- `extraImage` is repeated in saved order, omitting unavailable attachments.
+  These fields are only exported when the extra-images feature is enabled.
+  Image-only posts receive `title` and `extraImage`, without `content` or `image`.
+  Posts with neither text nor usable extra images receive no TekstTV fields.
+
+Poll the feed regularly and replace the imported TekstTV data for each returned
+item: if its TekstTV fields disappear, remove that item's imported TekstTV
+version. Missing fields do not remove the ordinary RSS item. Items that leave
+the feed window need a retention policy on the receiving narrowcaster.
+
+While enabled, RSS 2.0 post feeds are served without caching or conditional 304
+responses so metadata changes and date/weekday transitions are evaluated on
+every poll. Any hosting/CDN cache must also respect these no-cache headers or
+bypass these feed URLs. With the feature disabled, normal WordPress feed
+caching applies again.
+
 ## REST API
 
 Public endpoint, no login required:

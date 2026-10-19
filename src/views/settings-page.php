@@ -124,6 +124,12 @@ $render_feature_option = static function (string $value, string $label) use ($fe
         </div>
 
         <div class="teksttv-card">
+            <h2><?php echo esc_html('RSS'); ?></h2>
+            <p class="description"><?php echo esc_html('Voeg de Tekst TV-kop, tekst en afbeeldingen toe aan bestaande RSS 2.0-feeds. Alleen actieve berichten die volgens de planning nu getoond mogen worden krijgen deze extra velden.'); ?></p>
+            <?php $render_feature_option('rss_feed', 'TekstTV opnemen in RSS'); ?>
+        </div>
+
+        <div class="teksttv-card">
             <h2><?php echo esc_html('Slideduur'); ?></h2>
             <p class="description"><?php echo esc_html('Standaard weergaveduur per type slide. Kan per bericht worden overschreven.'); ?></p>
             <table class="form-table teksttv-form-table">
