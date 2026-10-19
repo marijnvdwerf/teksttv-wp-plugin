@@ -41,7 +41,7 @@ function removeClosestBlock(trigger: Element, onRemoved: () => void, focusUndo: 
         '.teksttv-block-toggle-control',
         emptyFocus ? document.querySelector<HTMLElement>(emptyFocus) : null,
     );
-    // Fire before removal so the event still reaches the form.
+    // Mark dirty while the block still belongs to its form.
     markFormDirty(block);
 
     const title = block.querySelector<HTMLElement>('.teksttv-block-title')?.textContent?.trim() || 'Onderdeel';

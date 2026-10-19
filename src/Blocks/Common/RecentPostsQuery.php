@@ -6,7 +6,7 @@ use TekstTV\Blocks\BuildContext;
 use TekstTV\Helpers;
 
 /**
- * Build recent-post queries with shared age, taxonomy, and deduplication rules.
+ * Builds recent-post queries with shared age, taxonomy, and deduplication rules.
  */
 final class RecentPostsQuery
 {
@@ -51,9 +51,7 @@ final class RecentPostsQuery
     }
 
     /**
-     * When a post leaves the age window: its local publish time plus the maximum age in
-     * calendar days, like the date_query above. Null without a limit; 0 (already expired)
-     * when the post date is unusable.
+     * Calculates expiry in local calendar days; null disables the limit, 0 rejects invalid dates.
      */
     public static function expires_at(\WP_Post $post): ?int
     {

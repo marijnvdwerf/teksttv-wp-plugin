@@ -24,15 +24,13 @@ export function previewSlideUrl(baseUrl: string, slide: Slide): string {
     return url.href;
 }
 
-/**
- * Split on supported page separators without normalizing raw segments.
- */
+/** Preserve raw segments for the editor. */
 export function splitPages(html: string, enabled = true): string[] {
     if (!enabled) return [html];
     return html.split(/<p[^>]*>\s*-{3,}\s*<\/p>|(?:^|\r?\n)[ \t]*-{3,}[ \t]*(?=\r?\n|$)/i);
 }
 
-/** Run `task` now, then retry every 100ms (max 50 attempts) until it reports success. */
+/** Run now, then retry up to 50 times at 100ms intervals. */
 export function retryUntil(task: () => boolean): void {
     if (task()) return;
     let attempts = 0;
@@ -75,9 +73,7 @@ export function removeImageItem(button: Element, onRemoved?: () => void, focusUn
     });
 }
 
-/**
- * Insert attachments and focus after wp.media restores its opener.
- */
+/** Defer focus until wp.media restores its opener. */
 export function appendImageItems(list: Element, attachments: WPMediaAttachment[], inputName: string): void {
     const firstNewIndex = list.children.length;
     list.insertAdjacentHTML('beforeend', attachments.map((att) => imageItemHtml(att, inputName)).join(''));

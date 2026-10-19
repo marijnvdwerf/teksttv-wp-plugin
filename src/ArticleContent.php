@@ -4,16 +4,17 @@ namespace TekstTV;
 
 use TekstTV\Blocks\Common\RecentPostsQuery;
 
-/** Per-post TekstTV rules shared by the playout and RSS; callers handle post type, status, password and query-level selection. */
+/**
+ * Prepares per-post content for playout and RSS.
+ * Callers handle post type, status, password, and query selection.
+ */
 final class ArticleContent
 {
-    /** @var array<int, true> Core never caches absent posts; skip them until the next prime_images(). */
+    /** @var array<int, true> Absent posts are not cached by core; reset on each prime_images(). */
     private static array $missing_images = [];
 
     /**
-     * Prime the attachments and category image meta that active posts can show, in a fixed
-     * number of queries.
-     * The article query already primes post metadata and category relationships.
+     * Primes image sources in batches; callers prime post meta and category relationships.
      *
      * @param array<mixed> $posts
      */
@@ -42,11 +43,10 @@ final class ArticleContent
         $image_ids = array_values(array_unique(array_filter(array_map(self::attachment_id(...), $image_ids))));
         if ($image_ids !== []) {
             _prime_post_caches($image_ids, false, true);
-            // A cache miss is not proof of absence (suspended cache additions), and image
-            // filters can resolve IDs without a post, so only skip IDs the database lacks.
+            // Cache additions may be suspended; only suppress IDs confirmed absent in the database.
             $uncached = _get_non_cached_ids($image_ids, 'posts');
             if ($uncached !== [] && !self::image_filters_active()) {
-                // get_post()'s own lookup: no type, status or query filters, so nothing that resolves is skipped.
+                // Match get_post(): any post type or status can resolve an image ID.
                 global $wpdb;
                 // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- integer IDs; absent rows have nothing to cache.
                 $existing = $wpdb->get_col('SELECT ID FROM ' . $wpdb->posts . ' WHERE ID IN (' . implode(',', array_map('intval', $uncached)) . ')');
@@ -56,7 +56,7 @@ final class ArticleContent
     }
 
     /**
-     * Null means inactive, too old, unscheduled, malformed or empty; the title keeps HTML entities (RSS decodes them).
+     * Prepares eligible, non-empty articles, retaining title entities for playout.
      *
      * @return array{title: string, pages: list<string>, sidebar_image: array<string, string>|null, images: list<array<string, string>>}|null
      */
@@ -66,7 +66,7 @@ final class ArticleContent
             return null;
         }
 
-        // An absolute instant, shared with the RSS validator, so a repeated DST hour cannot revive a post.
+        // Share an absolute expiry with RSS so a repeated DST hour cannot revive a post.
         $expires = RecentPostsQuery::expires_at($post);
         if ($expires !== null && $expires <= current_datetime()->getTimestamp()) {
             return null;
@@ -76,10 +76,7 @@ final class ArticleContent
             $start = self::string_meta($post->ID, '_teksttv_date_start');
             $end = self::string_meta($post->ID, '_teksttv_date_end');
             $days = get_post_meta($post->ID, '_teksttv_days', true);
-            // Authoritative; the playout's SQL date filter is only a pre-filter. Validate first:
-            // is_within_date_range() ignores unparseable dates and rolls over impossible ones, and
-            // is_allowed_on_day() cannot stringify non-scalar days. '' days is missing meta (all days);
-            // any other non-array is malformed.
+            // Reject malformed meta before the permissive block scheduling helpers.
             if (
                 !self::valid_date($start) || !self::valid_date($end)
                 || (is_array($days) ? array_filter($days, 'is_scalar') !== $days : $days !== '')
@@ -118,7 +115,7 @@ final class ArticleContent
         ];
     }
 
-    /** @return list<mixed> Saved order, re-indexed (corrupt meta can have string keys). */
+    /** @return list<mixed> Saved order. */
     private static function extra_image_ids(int $post_id): array
     {
         $ids = Helpers::has_feature('extra_images') ? get_post_meta($post_id, '_teksttv_images', true) : [];
@@ -131,14 +128,14 @@ final class ArticleContent
         return is_string($value) ? $value : null;
     }
 
-    /** Empty or a Y-m-d date that sanitizing leaves unchanged. */
+    /** Accepts empty or valid Y-m-d dates. */
     private static function valid_date(?string $date): bool
     {
         return $date !== null && Helpers::sanitize_date_input($date) === $date;
     }
 
     /**
-     * Split content into non-empty pages.
+     * Splits content into non-empty pages.
      *
      * @return list<string>
      */
@@ -156,7 +153,6 @@ final class ArticleContent
      */
     public static function get_sidebar_image_data(int $post_id): ?array
     {
-        // A disabled feature ignores its stored override, including '0'.
         if (Helpers::has_feature('sidebar_image')) {
             $override_id = get_post_meta($post_id, '_teksttv_sidebar_image', true);
             if ($override_id === '0' || $override_id === 0) {
@@ -200,7 +196,7 @@ final class ArticleContent
     }
 
     /**
-     * Corrupt (non-numeric) and empty IDs from meta have no image.
+     * Resolves valid attachment IDs to image data.
      *
      * @return array<string, string>|null
      */
@@ -214,7 +210,7 @@ final class ArticleContent
         return isset(self::$missing_images[$id]) && !self::image_filters_active() ? null : Helpers::get_image_data($id, 'large', $slot);
     }
 
-    /** Positive integer IDs only: '12.5' or '1e3' from corrupt meta must not resolve to another attachment. */
+    /** Reject coercions such as '12.5' or '1e3' to unrelated attachments. */
     private static function attachment_id(mixed $raw): int
     {
         return is_int($raw) || is_string($raw) ? max(0, (int) filter_var($raw, FILTER_VALIDATE_INT)) : 0;

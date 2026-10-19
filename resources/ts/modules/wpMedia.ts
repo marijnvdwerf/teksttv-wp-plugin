@@ -1,8 +1,6 @@
 import type { WPMediaAttachment, WPMediaFrame, WPMediaOptions } from './types';
 
-/**
- * Restore the Underscore snapshot required by wp.media when plugins replace `_`.
- */
+/** wp.media needs Underscore even when another plugin replaces `_`. */
 function ensureUnderscore(): void {
     const saved = window.wpUnderscore;
     if (!saved || typeof saved.defaults !== 'function') {
@@ -47,9 +45,7 @@ export function pickImages(
     return frame;
 }
 
-/**
- * Restore `_` for media interactions outside this wrapper.
- */
+/** Cover media interactions outside this wrapper. */
 export function guardUnderscoreForMedia(): void {
     document.addEventListener('click', ensureUnderscore, true);
     document.addEventListener('focusin', ensureUnderscore, true);

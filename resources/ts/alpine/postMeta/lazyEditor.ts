@@ -2,20 +2,12 @@ import { retryUntil } from '../../modules/utils';
 
 const EDITOR_ID = 'teksttv_content';
 
-/**
- * Initialize the editor from the config WordPress already generated in
- * `tinyMCEPreInit.mceInit` (the view sets `wp_skip_init`, so WordPress does not
- * do this itself). Returns true once the editor exists or init has started, or
- * false when TinyMCE or the config is not available yet so the caller can retry.
- */
+/** Returns true once initialization starts; false lets the caller retry. */
 export function initEditor(): boolean {
     if (typeof tinymce === 'undefined') return false;
     if (tinymce.get(EDITOR_ID)) return true;
 
-    // Init from WordPress' own stored config, exactly like core's editor init
-    // loop. (Do not use execCommand('mceAddEditor'): that builds the editor from
-    // EditorManager's last-used settings, so with wp_skip_init it would miss our
-    // toolbar and the external "Nieuwe slide" plugin.)
+    // wp_skip_init retains our toolbar/plugin config here; mceAddEditor would reuse another editor's settings.
     const config = typeof tinyMCEPreInit !== 'undefined' ? tinyMCEPreInit.mceInit[EDITOR_ID] : undefined;
     if (!config) return false;
 
@@ -23,13 +15,7 @@ export function initEditor(): boolean {
     return true;
 }
 
-/**
- * Initialize the editor once its container is rendered - has a layout box, not
- * display:none. Deliberately not "scrolled into view": an off-screen editor
- * lays out correctly, and TinyMCE only breaks inside a display:none subtree.
- * Covers both ways the field starts hidden: the block editor revealing
- * metaboxes after mount, and the "Toon op Tekst TV" toggle.
- */
+/** TinyMCE needs a layout box, even when off-screen, to initialize correctly. */
 export function initTeksttvEditorWhenDisplayed(): void {
     const wrap = document.getElementById(`wp-${EDITOR_ID}-wrap`);
     if (!wrap) return;
@@ -42,8 +28,7 @@ export function initTeksttvEditorWhenDisplayed(): void {
         return;
     }
 
-    // A display:none element reports no client rects and a zero content box;
-    // ResizeObserver fires when it gains a layout box, regardless of viewport.
+    // Observe layout changes, regardless of viewport visibility.
     const observer = new ResizeObserver(() => {
         if (!isDisplayed()) return;
         observer.disconnect();

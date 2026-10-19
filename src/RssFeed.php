@@ -30,7 +30,7 @@ final class RssFeed
         add_action('transition_post_status', [self::class, 'post_transitioned'], 10, 3);
         // Force deletes fire no status transition; invalidate once the row is gone.
         add_action('after_delete_post', static fn($post_id, $post) => self::post_transitioned('delete', $post->post_status, $post), 10, 2);
-        // Term changes without a post save change the feed's categories and the sidebar image.
+        // Term assignments can change feeds without saving the post.
         add_action('set_object_terms', static fn($post_id, $terms, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 4);
         add_action('deleted_term_relationships', static fn($post_id, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 3);
         // Category names order the sidebar image fallback.
@@ -38,8 +38,7 @@ final class RssFeed
     }
 
     /**
-     * Core derives feed Last-Modified and ETag from this value in WP::send_headers();
-     * raise it for changes that do not save a published post.
+     * Extends core's GMT date for both feed validators.
      */
     public static function last_modified(string|false $modified, string $timezone): string|false
     {
@@ -61,8 +60,7 @@ final class RssFeed
                 }
             }
         }
-        // Never in the future (RFC 9110): a revision ahead of the clock would absorb midnight and expiry.
-        // Never past the request start either: a write after this request read its data gets a later revision.
+        // Cap at now and request start so future revisions and concurrent writes remain detectable.
         // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- server-set request start, cast to int.
         $timestamp = min($timestamp, $now->getTimestamp(), (int) ($_SERVER['REQUEST_TIME'] ?? PHP_INT_MAX));
         return $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : $modified;
@@ -77,8 +75,7 @@ final class RssFeed
     }
 
     /**
-     * Only attachments (feed images) and published posts matter; drafts reach the feed through
-     * a publish transition. Object ID 0 is delete_post_meta_by_key().
+     * Drafts invalidate on publication; ID 0 means delete_post_meta_by_key().
      *
      * @param int|array<int|string> $meta_ids
      */
@@ -115,8 +112,7 @@ final class RssFeed
     }
 
     /**
-     * Every validator served so far is capped at its request's start and at now, so a revision
-     * one second ahead of now is newer than all of them, also for several writes within a second.
+     * Keeps the revision ahead of now to invalidate same-second responses.
      */
     public static function invalidate(): void
     {
@@ -124,8 +120,7 @@ final class RssFeed
     }
 
     /**
-     * Validators alone allow heuristic freshness (RFC 9111), so make caches revalidate every poll;
-     * a stricter or explicit policy from another plugin keeps its directives.
+     * Requires revalidation; validators alone permit heuristic freshness.
      *
      * @param array<string, string> $headers
      * @return array<string, string>
@@ -182,7 +177,7 @@ final class RssFeed
         }
     }
 
-    /** Emit plain text as XML 1.0: scrub invalid UTF-8, drop forbidden characters, then escape or wrap in split CDATA. */
+    /** Emits XML 1.0 text with invalid characters removed and CDATA terminators split. */
     private static function render_element(string $name, string $value, bool $cdata = false): void
     {
         $value = wp_check_invalid_utf8($value, true);
