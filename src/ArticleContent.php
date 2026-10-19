@@ -28,7 +28,7 @@ final class ArticleContent
             // Invalid stored dates are ineligible, consistently with the SQL pre-filter.
             if (
                 !self::valid_date($start) || !self::valid_date($end)
-                || (is_array($days) && array_filter($days, fn($day) => !is_scalar($day)) !== [])
+                || (is_array($days) && array_filter($days, 'is_scalar') !== $days)
                 || !Helpers::is_block_scheduled(['date_start' => $start, 'date_end' => $end, 'days' => $days])
             ) {
                 return null;

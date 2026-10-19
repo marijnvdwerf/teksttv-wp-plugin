@@ -103,14 +103,11 @@ final class RssFeed
         }
 
         $post = get_post();
-        if (
-            !$post || $post->post_type !== 'post' || $post->post_status !== 'publish'
-            || $post->post_password !== ''
-        ) {
+        // RSS is public; the playout deliberately also accepts password-protected posts.
+        if (!$post || $post->post_type !== 'post' || $post->post_status !== 'publish' || $post->post_password !== '') {
             return;
         }
 
-        // RSS is public; the playout deliberately also accepts password-protected posts.
         $article = ArticleContent::prepare($post);
         if ($article === null) {
             return;

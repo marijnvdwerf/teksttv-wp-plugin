@@ -123,15 +123,12 @@ final class ArticlesLoopBlock
 
             while ($emitted_post_count < $count && $query->have_posts()) {
                 $query->the_post();
-                $post_id = get_the_ID();
-
                 $post = get_post();
                 $article = $post ? ArticleContent::prepare($post) : null;
                 if ($article === null) {
                     continue;
                 }
 
-                $post_slides = [];
                 foreach ($article['pages'] as $page_content) {
                     $slide = [
                         'type' => 'text',
@@ -142,21 +139,16 @@ final class ArticlesLoopBlock
                     if ($article['sidebar_image'] !== null) {
                         $slide['image'] = $article['sidebar_image'];
                     }
-                    $post_slides[] = $slide;
+                    $slides[] = $slide;
                 }
                 foreach ($article['images'] as $image) {
-                    $post_slides[] = array_merge([
+                    $slides[] = array_merge([
                         'type' => 'image',
                         'duration' => $image_duration,
                     ], $image);
                 }
 
-                if ($post_slides === []) {
-                    continue;
-                }
-
-                array_push($slides, ...$post_slides);
-                BuildContext::mark_post_seen((int) $post_id);
+                BuildContext::mark_post_seen($post->ID);
                 $emitted_post_count++;
             }
 
