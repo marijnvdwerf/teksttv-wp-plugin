@@ -41,7 +41,6 @@ final class RssFeed
         if (is_feed('rss2') && !is_comment_feed() && Helpers::has_feature('rss_feed')) {
             $headers = array_merge($headers, wp_get_nocache_headers());
             unset($headers['ETag']);
-            $headers['Last-Modified'] = false;
         }
 
         return $headers;
@@ -56,7 +55,8 @@ final class RssFeed
 
     public static function render_item(): void
     {
-        if (!Helpers::has_feature('rss_feed') || is_comment_feed()) {
+        // Comment feeds fire commentrss2_item instead.
+        if (!Helpers::has_feature('rss_feed')) {
             return;
         }
 
@@ -69,13 +69,13 @@ final class RssFeed
             return;
         }
 
-        if (Helpers::has_feature('scheduling')) {
-            $start = (string) get_post_meta($post->ID, '_teksttv_date_start', true);
-            $end = (string) get_post_meta($post->ID, '_teksttv_date_end', true);
-            $days = Helpers::normalize_days(get_post_meta($post->ID, '_teksttv_days', true));
-            if (!Helpers::is_within_date_range($start, $end) || !Helpers::is_allowed_on_day($days)) {
-                return;
-            }
+        $scheduled = !Helpers::has_feature('scheduling') || Helpers::is_block_scheduled([
+            'date_start' => (string) get_post_meta($post->ID, '_teksttv_date_start', true),
+            'date_end' => (string) get_post_meta($post->ID, '_teksttv_date_end', true),
+            'days' => get_post_meta($post->ID, '_teksttv_days', true),
+        ]);
+        if (!$scheduled) {
+            return;
         }
 
         $pages = ArticlesLoopBlock::split_pages((string) get_post_meta($post->ID, '_teksttv_content', true));
@@ -83,7 +83,7 @@ final class RssFeed
         $attachment_ids = Helpers::has_feature('extra_images') ? get_post_meta($post->ID, '_teksttv_images', true) : [];
         foreach (is_array($attachment_ids) ? $attachment_ids : [] as $attachment_id) {
             $image = Helpers::get_image_data((int) $attachment_id, 'large', 'image_slide');
-            if ($image && !empty($image['url'])) {
+            if (!empty($image['url'])) {
                 $images[] = $image['url'];
             }
         }
@@ -101,7 +101,7 @@ final class RssFeed
             $body = implode("\n<hr />\n", array_map('wpautop', $pages));
             self::render_element('content', $body, true);
             $image = ArticlesLoopBlock::get_sidebar_image_data($post->ID);
-            if ($image && !empty($image['url'])) {
+            if (!empty($image['url'])) {
                 self::render_element('image', $image['url']);
             }
         }

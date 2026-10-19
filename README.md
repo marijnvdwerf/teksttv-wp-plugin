@@ -103,18 +103,17 @@ URI and local name, rather than relying on the `teksttv` prefix.
 - Only published, non-password-protected posts with **TekstTV actief** enabled
   receive TekstTV fields. If scheduling is enabled, their start/end dates
   (inclusive) and allowed weekdays must match the current WordPress site date.
-  When scheduling is disabled, stored planning is ignored, as in the playout.
+  As in the playout, disabled features ignore their stored post meta.
 - `title` uses the custom TekstTV title when that feature is enabled and a title
   is set; otherwise it uses the post title.
 - `content` contains the TekstTV HTML with paragraphs, wrapped in CDATA. When
   **Meerdere slides** is enabled, page separators become `<hr />` boundaries.
 - `image` is optional and uses the same sidebar image selection as the playout:
   a custom override (or explicit suppression), category image, then featured
-  image. A disabled sidebar override feature ignores its stored overrides.
+  image.
 - `extraImage` is repeated in saved order, omitting unavailable attachments.
-  These fields are only exported when the extra-images feature is enabled.
-  Image-only posts receive `title` and `extraImage`, without `content` or `image`.
-  Posts with neither text nor usable extra images receive no TekstTV fields.
+  Image-only posts receive only `title` and `extraImage`; posts with neither
+  text nor usable extra images receive no TekstTV fields.
 
 Poll the feed regularly and replace the imported TekstTV data for each returned
 item: if its TekstTV fields disappear, remove that item's imported TekstTV

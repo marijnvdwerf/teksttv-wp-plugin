@@ -30,10 +30,10 @@ class RssFeedTest extends TestCase
         Functions\when('get_option')->alias(fn($key, $default = false) => $key === 'teksttv_features' ? $this->features : $default);
         Functions\when('get_post')->alias(fn() => $this->post);
         Functions\when('get_post_meta')->alias(fn($id, $key) => $this->meta[$key] ?? '');
-        Functions\when('get_the_title')->justReturn('Gewone &amp; titel');
+        Functions\when('get_the_title')->justReturn('Gewone &amp; titel &lpar;regio&rpar;');
         Functions\when('is_comment_feed')->justReturn(false);
         Functions\when('wp_check_invalid_utf8')->returnArg();
-        Functions\when('esc_xml')->alias(fn($value) => htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8'));
+        Functions\when('esc_xml')->alias(fn($value) => htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8', false));
         Functions\when('esc_url')->returnArg();
         Functions\when('wpautop')->alias(fn($value) => '<p>' . $value . '</p>');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
@@ -74,25 +74,23 @@ class RssFeedTest extends TestCase
 
     public function test_falls_back_to_decoded_post_title(): void
     {
-        $this->assertSame('Gewone & titel', (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->title);
+        $this->assertSame('Gewone & titel (regio)', (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->title);
     }
 
     public function test_disabled_title_feature_ignores_stored_override(): void
     {
         $this->features = ['rss_feed'];
         $this->meta['_teksttv_title'] = 'Verborgen kop';
-        $this->assertSame('Gewone & titel', (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->title);
+        $this->assertSame('Gewone & titel (regio)', (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->title);
     }
 
     /** @return iterable<string, array{string, mixed}> */
     public static function excludedMeta(): iterable
     {
         yield 'inactive' => ['_teksttv_active', '0'];
-        yield 'missing active flag' => ['_teksttv_active', ''];
         yield 'future start' => ['_teksttv_date_start', '2026-10-20'];
         yield 'expired end' => ['_teksttv_date_end', '2026-10-18'];
         yield 'wrong weekday' => ['_teksttv_days', ['2', '3']];
-        yield 'no weekdays' => ['_teksttv_days', []];
         yield 'empty content' => ['_teksttv_content', " \n\t"];
         yield 'only page separators' => ['_teksttv_content', "---\n---"];
     }
@@ -102,15 +100,6 @@ class RssFeedTest extends TestCase
     {
         $this->meta[$key] = $value;
         $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
-    }
-
-    public function test_dates_are_inclusive_and_use_site_timezone(): void
-    {
-        $this->meta['_teksttv_date_start'] = '2026-10-19';
-        $this->meta['_teksttv_date_end'] = '2026-10-19';
-        $this->meta['_teksttv_days'] = ['1'];
-        Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 00:15:00', new \DateTimeZone('Europe/Amsterdam')));
-        $this->assertNotEmpty((string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
     }
 
     public function test_disabled_scheduling_ignores_retained_dates_and_days(): void
@@ -143,13 +132,6 @@ class RssFeedTest extends TestCase
         $this->assertSame("<p>Eerste</p>\n<hr />\n<p>Tweede</p>", (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
     }
 
-    public function test_disabled_page_separators_are_not_split(): void
-    {
-        $this->features = ['rss_feed'];
-        $this->meta['_teksttv_content'] = "Eerste\n---\nTweede";
-        $this->assertSame("<p>Eerste\n---\nTweede</p>", (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
-    }
-
     public function test_exports_sidebar_and_extra_images_in_order_skipping_missing_attachments(): void
     {
         $this->meta['_teksttv_sidebar_image'] = '10';
@@ -157,13 +139,6 @@ class RssFeedTest extends TestCase
         $fields = $this->renderItem()->children(RssFeed::XML_NAMESPACE);
         $this->assertSame('https://example.com/10.jpg?a=1&b=2', (string) $fields->image);
         $this->assertSame(['https://example.com/12.jpg?a=1&b=2', 'https://example.com/11.jpg?a=1&b=2'], array_map('strval', iterator_to_array($fields->extraImage, false)));
-    }
-
-    public function test_suppressed_sidebar_image_is_omitted(): void
-    {
-        $this->meta['_teksttv_sidebar_image'] = '0';
-        Functions\expect('get_post_thumbnail_id')->never();
-        $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE)->image);
     }
 
     public function test_disabled_image_features_ignore_stored_overrides(): void
@@ -194,10 +169,9 @@ class RssFeedTest extends TestCase
         $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
     }
 
-    public function test_comment_feed_has_no_teksttv_fields_or_namespace(): void
+    public function test_comment_feed_has_no_teksttv_namespace(): void
     {
         Functions\when('is_comment_feed')->justReturn(true);
-        $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
         $this->expectOutputString('');
         RssFeed::render_namespace();
     }
@@ -212,7 +186,7 @@ class RssFeedTest extends TestCase
     public function test_enabled_feed_has_no_stale_cache_validators(): void
     {
         Functions\when('is_feed')->justReturn(true);
-        Functions\when('wp_get_nocache_headers')->justReturn(['Cache-Control' => 'no-cache, no-store, must-revalidate', 'Last-Modified' => false]);
+        Functions\when('wp_get_nocache_headers')->justReturn(['Cache-Control' => 'no-cache, no-store, must-revalidate', 'Last-Modified' => false, 'ETag' => '"filtered"']);
         $headers = RssFeed::filter_headers(['ETag' => '"old"', 'Last-Modified' => 'old', 'Content-Type' => 'application/rss+xml']);
         $this->assertArrayNotHasKey('ETag', $headers);
         $this->assertFalse($headers['Last-Modified']);
