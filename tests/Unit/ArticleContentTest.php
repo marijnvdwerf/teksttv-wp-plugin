@@ -51,7 +51,7 @@ class ArticleContentTest extends TestCase
 
     public function test_prepares_title_pages_and_image_data_in_saved_order(): void
     {
-        $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), [11], 11, 12]];
+        $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), [11], '00', 0.5, 11, 12]];
         $this->meta['_teksttv_content'] = "Eerste\n---\nTweede";
         $article = ArticleContent::prepare($this->post);
         $this->assertSame('Eigen kop', $article['title']);

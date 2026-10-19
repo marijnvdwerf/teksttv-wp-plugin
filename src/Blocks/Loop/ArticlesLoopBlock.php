@@ -106,6 +106,7 @@ final class ArticlesLoopBlock
         $text_duration = Helpers::duration_ms($block['duration_text'] ?? null, 'teksttv_duration_text');
         $image_duration = Helpers::duration_ms($block['duration_image'] ?? null, 'teksttv_duration_image');
         $batch_size = max(10, $count);
+        $max_age = RecentPostsQuery::max_age_days();
         // Keep post__not_in fixed so pagination does not grow SQL/cache keys.
         $seen_post_ids = BuildContext::get_seen_post_ids();
         $emitted_post_count = 0;
@@ -113,6 +114,8 @@ final class ArticlesLoopBlock
         for ($batch = 0; $batch < self::MAX_QUERY_BATCHES && $emitted_post_count < $count; $batch++) {
             $query = new WP_Query(RecentPostsQuery::args($batch_size, $taxonomy_filters, [
                 'meta_query' => $meta_query,
+                // A day wider than prepare()'s expires_at(), so a DST shift cannot hide an eligible post.
+                'date_query' => $max_age > 0 ? [['after' => ($max_age + 1) . ' days ago']] : [],
                 'post__not_in' => $seen_post_ids,
                 'paged' => $batch + 1,
                 'orderby' => ['date' => 'DESC', 'ID' => 'DESC'],

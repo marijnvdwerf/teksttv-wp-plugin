@@ -207,11 +207,12 @@ final class ArticleContent
      */
     private static function image_data(mixed $id, string $slot): ?array
     {
-        if (!is_numeric($id) || !$id) {
+        $id = is_numeric($id) ? (int) $id : 0;
+        if ($id <= 0) {
             return null;
         }
         // Filters added after priming (e.g. during rss2_head) may still resolve a missing ID.
-        return isset(self::$missing_images[(int) $id]) && !self::image_filters_active() ? null : Helpers::get_image_data((int) $id, 'large', $slot);
+        return isset(self::$missing_images[$id]) && !self::image_filters_active() ? null : Helpers::get_image_data($id, 'large', $slot);
     }
 
     private static function image_filters_active(): bool
