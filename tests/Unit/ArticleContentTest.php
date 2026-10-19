@@ -145,12 +145,41 @@ class ArticleContentTest extends TestCase
         Functions\expect('wp_lazyload_term_meta')->once()->with([7, 8]);
         Functions\expect('_prime_post_caches')->once()->with([13, 12, 999, 10, 11], false, true);
         Functions\expect('_get_non_cached_ids')->once()->with([13, 12, 999, 10, 11], 'posts')->andReturn([999]);
+        Functions\when('has_filter')->justReturn(false);
+        Functions\expect('get_posts')->once()->andReturn([]);
         Functions\expect('wp_get_attachment_image_url')->with(999, 'large')->never();
         try {
             ArticleContent::prime_images([$this->post]);
             $article = ArticleContent::prepare($this->post);
             $this->assertSame('https://example.com/10.jpg', $article['sidebar_image']['url']);
             $this->assertCount(2, $article['images']);
+        } finally {
+            ArticleContent::prime_images([]);
+        }
+    }
+
+    /** @return array<string, array{bool, list<int>}> */
+    public static function uncachedAttachments(): array
+    {
+        return [
+            'existing attachment the cache did not keep' => [false, [999]],
+            'image filter that resolves IDs without a post' => [true, []],
+        ];
+    }
+
+    /** Priming must not hide images that rendering without priming would show. */
+    #[DataProvider('uncachedAttachments')]
+    public function test_uncached_attachments_are_only_skipped_when_absent(bool $image_filter, array $existing): void
+    {
+        $this->meta['_teksttv_images'] = [999];
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id) => 'https://example.com/' . $id . '.jpg');
+        Functions\when('_prime_post_caches')->justReturn(null);
+        Functions\when('_get_non_cached_ids')->justReturn([999]);
+        Functions\when('has_filter')->alias(fn($hook) => $image_filter && $hook === 'image_downsize');
+        Functions\when('get_posts')->justReturn($existing);
+        try {
+            ArticleContent::prime_images([$this->post]);
+            $this->assertSame('https://example.com/999.jpg', ArticleContent::prepare($this->post)['images'][0]['url']);
         } finally {
             ArticleContent::prime_images([]);
         }

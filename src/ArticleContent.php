@@ -7,11 +7,12 @@ use TekstTV\Blocks\Common\RecentPostsQuery;
 /** Per-post TekstTV rules shared by the playout and RSS; callers choose which posts to expose. */
 final class ArticleContent
 {
-    /** @var array<int, true> Missing attachments must not trigger a fresh lookup for each slide. */
+    /** @var array<int, true> Core never caches absent posts; skip them until the next prime_images(). */
     private static array $missing_images = [];
 
     /**
-     * Prime all attachment posts and metadata referenced by active posts in bounded batches.
+     * Prime the attachments and category image meta that active posts can show, in a fixed
+     * number of queries. Replaces the missing-attachment list used until the next call.
      * The article query already primes post metadata and category relationships.
      *
      * @param array<mixed> $posts
@@ -48,7 +49,20 @@ final class ArticleContent
         $image_ids = array_values(array_unique(array_map('intval', array_filter($image_ids, fn($id) => is_numeric($id) && (int) $id > 0))));
         if ($image_ids !== []) {
             _prime_post_caches($image_ids, false, true);
-            self::$missing_images = array_fill_keys(_get_non_cached_ids($image_ids, 'posts'), true);
+            // A cache miss is not proof of absence (suspended cache additions), and image
+            // filters can resolve IDs without a post, so only skip IDs the database lacks.
+            $uncached = _get_non_cached_ids($image_ids, 'posts');
+            if ($uncached !== [] && !has_filter('image_downsize') && !has_filter('wp_get_attachment_image_src')) {
+                $existing = get_posts([
+                    'post_type' => 'attachment',
+                    'post_status' => 'any',
+                    'post__in' => $uncached,
+                    'posts_per_page' => -1,
+                    'fields' => 'ids',
+                    'no_found_rows' => true,
+                ]);
+                self::$missing_images = array_fill_keys(array_diff($uncached, array_map('intval', $existing)), true);
+            }
         }
     }
 

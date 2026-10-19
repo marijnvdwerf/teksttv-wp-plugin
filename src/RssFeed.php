@@ -92,6 +92,7 @@ final class RssFeed
         if (Helpers::has_feature('rss_feed') && !is_comment_feed()) {
             echo ' xmlns:teksttv="' . esc_url(self::XML_NAMESPACE) . '"';
             self::$namespace_rendered = true;
+            // rss2_ns fires once before the item loop, so prime the feed's images here.
             global $wp_query;
             if ($wp_query instanceof \WP_Query && is_array($wp_query->posts)) {
                 ArticleContent::prime_images($wp_query->posts);
