@@ -12,6 +12,11 @@ delete_option('teksttv_commercial_blocks');
 // RSS tests change these core options.
 update_option('posts_per_rss', 10);
 update_option('timezone_string', '');
+// A timed-out RSS midnight test cannot run its own cleanup.
+if (file_exists(WPMU_PLUGIN_DIR . '/rss-clock.php')) {
+    unlink(WPMU_PLUGIN_DIR . '/rss-clock.php');
+}
+delete_option('teksttv_test_clock');
 
 update_option('teksttv_channels', [['slug' => 'tv1', 'label' => 'TV 1']]);
 update_option('teksttv_preview_url', 'https://preview.example.test/');

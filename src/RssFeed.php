@@ -10,24 +10,33 @@ final class RssFeed
 
     private static bool $namespace_rendered = false;
 
-    private static bool $invalidated = false;
+    /** @var array<int, true> Sites written to in this request, keyed by blog ID. */
+    private static array $changed_blogs = [];
 
     public static function init(): void
     {
         add_action('rss2_ns', [self::class, 'render_namespace']);
         add_action('rss2_item', [self::class, 'render_item']);
         add_filter('get_lastpostmodified', [self::class, 'last_modified'], 10, 2);
-        foreach (['added_option', 'updated_option', 'deleted_option'] as $hook) {
-            add_action($hook, [self::class, 'option_changed']);
+        foreach (['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset'] as $option) {
+            foreach (['add_option_', 'update_option_', 'delete_option_'] as $prefix) {
+                add_action($prefix . $option, [self::class, 'invalidate']);
+            }
         }
         foreach (['added_post_meta', 'updated_post_meta', 'deleted_post_meta', 'added_term_meta', 'updated_term_meta', 'deleted_term_meta'] as $hook) {
             add_action($hook, [self::class, 'meta_changed'], 10, 3);
         }
-        add_action('save_post', [self::class, 'invalidate']);
+        add_action('transition_post_status', [self::class, 'post_transitioned'], 10, 3);
+        // Force deletes fire no status transition.
+        add_action('before_delete_post', static fn($post_id, $post) => self::post_transitioned('delete', $post->post_status, $post), 10, 2);
+        // Term changes without a post save change the feed's categories and the sidebar image.
+        add_action('set_object_terms', static fn($post_id, $terms, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 4);
+        add_action('deleted_term_relationships', static fn($post_id, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 3);
     }
 
     /**
-     * Extend core's validators before it evaluates conditional requests.
+     * Core derives feed Last-Modified and ETag from this value in WP::send_headers();
+     * raise it for changes that do not save a published post.
      */
     public static function last_modified(string|false $modified, string $timezone): string|false
     {
@@ -36,7 +45,7 @@ final class RssFeed
         }
 
         // Retain the revision while disabled: turning export off changes the XML too.
-        $timestamp = max($modified ? (strtotime($modified . ' GMT') ?: 0) : 0, (int) get_option('teksttv_rss_modified', 0));
+        $timestamp = self::revision($modified);
         if (Helpers::has_feature('rss_feed')) {
             $now = current_datetime();
             $timestamp = max($timestamp, $now->setTime(0, 0)->getTimestamp());
@@ -48,7 +57,7 @@ final class RssFeed
                     if (!$post instanceof \WP_Post) {
                         continue;
                     }
-                    $published = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $post->post_date, wp_timezone());
+                    $published = get_post_datetime($post);
                     $expiry = $published ? $published->modify('+' . $max_age . ' days')->getTimestamp() : 0;
                     if ($expiry <= $now->getTimestamp()) {
                         $timestamp = max($timestamp, $expiry);
@@ -59,31 +68,61 @@ final class RssFeed
         return $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : $modified;
     }
 
-    public static function option_changed(string $option): void
-    {
-        if (in_array($option, ['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset'], true)) {
-            self::invalidate();
-        }
-    }
-
-    /** @param int|list<int> $meta_ids */
+    /** @param int|array<int|string> $meta_ids */
     public static function meta_changed(int|array $meta_ids, int $object_id, string $key): void
     {
-        if (str_starts_with($key, '_teksttv_') || in_array($key, ['_thumbnail_id', '_yoast_wpseo_primary_category', '_wp_attachment_metadata', '_wp_attached_file'], true)) {
+        if ((str_starts_with($key, '_teksttv_') && !str_starts_with($key, '_teksttv_ai_')) || in_array($key, ['_thumbnail_id', '_yoast_wpseo_primary_category', '_wp_attachment_metadata', '_wp_attached_file'], true)) {
             self::invalidate();
         }
     }
 
+    /** Saved and unpublished posts; core's date only covers posts that remain published. */
+    public static function post_transitioned(string $new_status, string $old_status, \WP_Post $post): void
+    {
+        if ($post->post_type === 'post' && ($new_status === 'publish' || $old_status === 'publish')) {
+            self::invalidate();
+        }
+    }
+
+    public static function terms_changed(int $post_id, string $taxonomy): void
+    {
+        if (in_array($taxonomy, ['category', 'post_tag'], true) && get_post_type($post_id) === 'post' && get_post_status($post_id) === 'publish') {
+            self::invalidate();
+        }
+    }
+
+    /**
+     * Advance once, after the request's last write: a feed fetched between writes
+     * of one request (an editor save, an import) must not keep a final validator.
+     */
     public static function invalidate(): void
     {
-        if (self::$invalidated) {
-            return;
+        self::$changed_blogs[get_current_blog_id()] = true;
+        add_action('shutdown', [self::class, 'save_revision'], PHP_INT_MAX);
+    }
+
+    public static function save_revision(): void
+    {
+        foreach (array_keys(self::$changed_blogs) as $blog_id) {
+            // Only multisite has other blog IDs, so single sites never call switch_to_blog().
+            $switched = $blog_id !== get_current_blog_id();
+            if ($switched) {
+                switch_to_blog($blog_id);
+            }
+            // HTTP dates have second precision: go past every validator served up to this second,
+            // including midnight and expiry, so even writes within the same second advance it.
+            update_option('teksttv_rss_modified', max(time(), self::revision(get_lastpostmodified('gmt'))) + 1, false);
+            if ($switched) {
+                restore_current_blog();
+            }
         }
-        self::$invalidated = true;
-        // HTTP dates have second precision. Advance even for writes in the same second.
-        $modified = get_lastpostmodified('gmt');
-        $previous = max((int) get_option('teksttv_rss_modified', 0), $modified ? (strtotime($modified . ' GMT') ?: 0) : 0);
-        update_option('teksttv_rss_modified', max(time(), $previous + 1), false);
+        self::$changed_blogs = [];
+    }
+
+    /** Later of core's GMT date and the stored revision, as a timestamp. */
+    private static function revision(string|false $modified): int
+    {
+        return max($modified ? (int) strtotime($modified . ' GMT') : 0, (int) get_option('teksttv_rss_modified', 0));
     }
 
     public static function render_namespace(): void
