@@ -32,6 +32,7 @@ class ArticleContentTest extends TestCase
         Functions\when('get_post_meta')->alias(fn($id, $key) => $this->meta[$key] ?? '');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('wp_timezone')->justReturn(new \DateTimeZone('Europe/Amsterdam'));
+        Functions\when('get_post_stati')->justReturn(['publish' => 'publish', 'inherit' => 'inherit', 'trash' => 'trash', 'auto-draft' => 'auto-draft']);
         Functions\when('get_post_datetime')->alias(fn($post) => \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $post->post_date, new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('get_the_title')->justReturn('Gewone titel');
         Functions\when('get_the_terms')->justReturn(false);
@@ -168,7 +169,8 @@ class ArticleContentTest extends TestCase
         Functions\expect('_prime_post_caches')->once()->with([14, 13, 12, 999, 10, 11], false, true);
         Functions\expect('_get_non_cached_ids')->once()->with([14, 13, 12, 999, 10, 11], 'posts')->andReturn([999]);
         Functions\when('has_filter')->justReturn(false);
-        Functions\expect('get_posts')->once()->andReturn([]);
+        // Trashed attachments still resolve in core, so they are not missing.
+        Functions\expect('get_posts')->once()->with(\Mockery::on(fn($args) => in_array('trash', $args['post_status'], true)))->andReturn([]);
         Functions\when('wp_get_attachment_image_url')->alias(fn($id) => $id === 999 ? $this->fail('Missing attachment was looked up again.') : 'https://example.com/' . $id . '.jpg');
         try {
             ArticleContent::prime_images([$this->post]);
@@ -201,6 +203,26 @@ class ArticleContentTest extends TestCase
         Functions\when('get_posts')->justReturn($existing);
         try {
             ArticleContent::prime_images([$this->post]);
+            $this->assertSame('https://example.com/999.jpg', ArticleContent::prepare($this->post)['images'][0]['url']);
+        } finally {
+            ArticleContent::prime_images([]);
+        }
+    }
+
+    public function test_image_filters_added_after_priming_still_resolve_missing_ids(): void
+    {
+        $this->meta['_teksttv_images'] = [999];
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id) => 'https://example.com/' . $id . '.jpg');
+        Functions\when('_prime_post_caches')->justReturn(null);
+        Functions\when('_get_non_cached_ids')->justReturn([999]);
+        Functions\when('get_posts')->justReturn([]);
+        $filters = false;
+        Functions\when('has_filter')->alias(function ($hook) use (&$filters) {
+            return $filters && $hook === 'image_downsize';
+        });
+        try {
+            ArticleContent::prime_images([$this->post]);
+            $filters = true;
             $this->assertSame('https://example.com/999.jpg', ArticleContent::prepare($this->post)['images'][0]['url']);
         } finally {
             ArticleContent::prime_images([]);

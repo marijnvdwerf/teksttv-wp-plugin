@@ -52,10 +52,10 @@ final class ArticleContent
             // A cache miss is not proof of absence (suspended cache additions), and image
             // filters can resolve IDs without a post, so only skip IDs the database lacks.
             $uncached = _get_non_cached_ids($image_ids, 'posts');
-            if ($uncached !== [] && !has_filter('image_downsize') && !has_filter('wp_get_attachment_image_src')) {
+            if ($uncached !== [] && !self::image_filters_active()) {
                 $existing = get_posts([
                     'post_type' => 'attachment',
-                    'post_status' => 'any',
+                    'post_status' => array_keys(get_post_stati()),
                     'post__in' => $uncached,
                     'posts_per_page' => -1,
                     'fields' => 'ids',
@@ -255,6 +255,12 @@ final class ArticleContent
     /** @return array<string, string>|null */
     private static function image_data(int $id, string $slot): ?array
     {
-        return isset(self::$missing_images[$id]) ? null : Helpers::get_image_data($id, 'large', $slot);
+        // Filters added after priming (e.g. during rss2_head) may still resolve the ID.
+        return isset(self::$missing_images[$id]) && !self::image_filters_active() ? null : Helpers::get_image_data($id, 'large', $slot);
+    }
+
+    private static function image_filters_active(): bool
+    {
+        return has_filter('image_downsize') || has_filter('wp_get_attachment_image_src');
     }
 }
