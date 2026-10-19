@@ -117,6 +117,14 @@ URI and local name, rather than relying on the `teksttv` prefix.
   Image-only posts receive only `title` and `extraImage`; posts with neither
   text nor usable extra images receive no TekstTV fields.
 
+The playout and RSS use the same per-post eligibility, title, page and image
+rules (`ArticleContent::prepare`). Invalid stored scheduling dates exclude the
+post in both, and an empty URL from `teksttv_image_url` suppresses an image.
+The callers intentionally select different sets of posts: the playout applies
+its channel taxonomy, count and deduplication rules and includes
+password-protected published posts; RSS follows the requested WordPress feed
+and never exposes TekstTV fields for password-protected posts.
+
 Poll the feed regularly and replace the imported TekstTV data for each returned
 item: if its TekstTV fields disappear, remove that item's imported TekstTV
 version. Missing fields do not remove the ordinary RSS item. Items that leave

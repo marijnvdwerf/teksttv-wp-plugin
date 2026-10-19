@@ -2,9 +2,6 @@
 
 namespace TekstTV;
 
-use TekstTV\Blocks\Common\RecentPostsQuery;
-use TekstTV\Blocks\Loop\ArticlesLoopBlock;
-
 final class RssFeed
 {
     public const XML_NAMESPACE = 'https://github.com/oszuidwest/teksttv-wp-plugin/rss/1.0';
@@ -73,77 +70,26 @@ final class RssFeed
         if (
             !$post || $post->post_type !== 'post' || $post->post_status !== 'publish'
             || $post->post_password !== ''
-            || get_post_meta($post->ID, '_teksttv_active', true) !== '1'
         ) {
             return;
         }
 
-        // Same exclusive cutoff as the playout's date_query: calendar days in the site timezone.
-        $max_age = RecentPostsQuery::max_age_days();
-        if ($max_age > 0 && $post->post_date <= current_datetime()->modify('-' . $max_age . ' days')->format('Y-m-d H:i:s')) {
+        // RSS is public; the playout deliberately also accepts password-protected posts.
+        $article = ArticleContent::prepare($post);
+        if ($article === null) {
             return;
         }
-
-        // Imported or corrupt meta can hold arrays or objects; skip the item instead of breaking the feed.
-        if (Helpers::has_feature('scheduling')) {
-            $start = self::string_meta($post->ID, '_teksttv_date_start');
-            $end = self::string_meta($post->ID, '_teksttv_date_end');
-            $days = get_post_meta($post->ID, '_teksttv_days', true);
-            // DateTime rejects NUL bytes with a ValueError.
-            if (
-                $start === null || $end === null || str_contains($start . $end, "\0")
-                || (is_array($days) && array_filter($days, fn($day) => !is_scalar($day)) !== [])
-                || !Helpers::is_block_scheduled(['date_start' => $start, 'date_end' => $end, 'days' => $days])
-            ) {
-                return;
-            }
-        }
-
-        $content = self::string_meta($post->ID, '_teksttv_content');
-        $override = Helpers::has_feature('custom_title') ? self::string_meta($post->ID, '_teksttv_title') : '';
-        if ($content === null || $override === null) {
-            return;
-        }
-
-        $pages = ArticlesLoopBlock::split_pages($content);
-        $images = [];
-        $attachment_ids = Helpers::has_feature('extra_images') ? get_post_meta($post->ID, '_teksttv_images', true) : [];
-        foreach (is_array($attachment_ids) ? $attachment_ids : [] as $attachment_id) {
-            if (!is_numeric($attachment_id)) {
-                continue;
-            }
-            $image = Helpers::get_image_data((int) $attachment_id, 'large', 'image_slide');
-            if (!empty($image['url'])) {
-                $images[] = $image['url'];
-            }
-        }
-
-        // Like the playout, image-only posts are exported.
-        if ($pages === [] && $images === []) {
-            return;
-        }
-
-        $title = !empty($override) ? $override : get_the_title($post);
-        self::render_element('title', html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-
-        if ($pages !== []) {
-            $body = implode("\n<hr />\n", array_map('wpautop', $pages));
+        self::render_element('title', html_entity_decode($article['title'], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($article['pages'] !== []) {
+            $body = implode("\n<hr />\n", array_map('wpautop', $article['pages']));
             self::render_element('content', $body, true);
-            $image = ArticlesLoopBlock::get_sidebar_image_data($post->ID);
-            if (!empty($image['url'])) {
-                self::render_element('image', $image['url']);
+            if ($article['sidebar_image'] !== null) {
+                self::render_element('image', $article['sidebar_image']['url']);
             }
         }
-
-        foreach ($images as $url) {
-            self::render_element('extraImage', $url);
+        foreach ($article['images'] as $image) {
+            self::render_element('extraImage', $image['url']);
         }
-    }
-
-    private static function string_meta(int $post_id, string $key): ?string
-    {
-        $value = get_post_meta($post_id, $key, true);
-        return is_string($value) ? $value : null;
     }
 
     /** Emit plain text as XML 1.0: scrub invalid UTF-8, drop forbidden characters, then escape or wrap in split CDATA. */
