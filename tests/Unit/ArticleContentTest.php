@@ -137,22 +137,22 @@ class ArticleContentTest extends TestCase
 
     public function test_primes_sources_in_batches_and_skips_missing_attachments(): void
     {
-        $this->meta['_teksttv_images'] = [12, 999, 12];
+        $this->meta += ['_teksttv_sidebar_image' => '14', '_teksttv_images' => [12, 999, new \stdClass(), 12]];
         Functions\when('get_the_terms')->justReturn([(object) ['term_id' => 8]]);
         Functions\when('get_post_thumbnail_id')->justReturn(13);
         Functions\when('get_term_meta')->alias(fn($id) => $id === 7 ? '10' : '11');
         Functions\when('apply_filters')->alias(fn($hook, $value) => $hook === 'teksttv_primary_category' ? 7 : $value);
         Functions\expect('wp_lazyload_term_meta')->once()->with([7, 8]);
-        Functions\expect('_prime_post_caches')->once()->with([13, 12, 999, 10, 11], false, true);
-        Functions\expect('_get_non_cached_ids')->once()->with([13, 12, 999, 10, 11], 'posts')->andReturn([999]);
+        Functions\expect('_prime_post_caches')->once()->with([14, 13, 12, 999, 10, 11], false, true);
+        Functions\expect('_get_non_cached_ids')->once()->with([14, 13, 12, 999, 10, 11], 'posts')->andReturn([999]);
         Functions\when('has_filter')->justReturn(false);
         Functions\expect('get_posts')->once()->andReturn([]);
-        Functions\expect('wp_get_attachment_image_url')->with(999, 'large')->never();
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id) => $id === 999 ? $this->fail('Missing attachment was looked up again.') : 'https://example.com/' . $id . '.jpg');
         try {
             ArticleContent::prime_images([$this->post]);
             $article = ArticleContent::prepare($this->post);
-            $this->assertSame('https://example.com/10.jpg', $article['sidebar_image']['url']);
-            $this->assertCount(2, $article['images']);
+            $this->assertSame('https://example.com/14.jpg', $article['sidebar_image']['url']);
+            $this->assertSame(['https://example.com/12.jpg', 'https://example.com/12.jpg'], array_column($article['images'], 'url'));
         } finally {
             ArticleContent::prime_images([]);
         }

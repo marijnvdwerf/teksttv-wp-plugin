@@ -49,20 +49,24 @@ try {
                 set_post_thumbnail($id, $images[0]);
             } else {
                 $term = wp_insert_term('Image category ' . $count . ' ' . $i, 'category')['term_id'];
-                wp_set_post_categories($id, [$group, $term]);
                 update_term_meta($term, '_teksttv_category_image', $images[0]);
                 $term_ids[] = $term;
                 $created_terms['category'][] = $term;
+                // A primary category the post lacks is not in core's lazy term meta queue.
                 if ($i % 4 === 1) {
                     update_post_meta($id, '_yoast_wpseo_primary_category', $term);
+                } else {
+                    wp_set_post_categories($id, [$group, $term]);
                 }
             }
         }
         foreach (['rss', 'playout'] as $caller) {
-            foreach ([true, false] as $cold) {
+            // A discarded warm-up pass keeps one-time costs out of the first measurement.
+            foreach ($caller === 'rss' ? ['warm-up', 'cold', 'warm', 'unprimed'] : ['warm-up', 'cold', 'warm'] as $pass) {
+                $cold = $pass !== 'warm';
                 ArticleContent::prime_images([]);
                 // The query queues its category and tag term meta for lazy loading.
-                $query = new WP_Query(['post__in' => $post_ids, 'posts_per_page' => 50, 'no_found_rows' => true]);
+                $query = new WP_Query(['post__in' => $post_ids, 'posts_per_page' => 50, 'no_found_rows' => true, 'ignore_sticky_posts' => true]);
                 if ($cold) {
                     wp_cache_delete_multiple($term_ids, 'term_meta');
                     wp_cache_delete_multiple($image_ids, 'posts');
@@ -70,7 +74,8 @@ try {
                 }
                 $start = $wpdb->num_queries;
                 if ($caller === 'rss') {
-                    $GLOBALS['wp_query'] = $query;
+                    // A main query that ran no query leaves the feed's images unprimed.
+                    $GLOBALS['wp_query'] = $pass === 'unprimed' ? new WP_Query() : $query;
                     ob_start();
                     RssFeed::render_namespace();
                     foreach ($query->posts as $post) {
@@ -82,9 +87,12 @@ try {
                     BuildContext::reset();
                     $output = wp_json_encode(ArticlesLoopBlock::build(['count' => 50, 'taxonomy_filters' => ['category' => [$group]]]));
                 }
+                if ($pass === 'warm-up') {
+                    continue;
+                }
                 $slides = $caller === 'playout' ? json_decode($output, true) : [];
                 $results[] = [
-                    'posts' => $count, 'caller' => $caller, 'cold' => $cold,
+                    'posts' => $count, 'caller' => $caller, 'cold' => $cold, 'primed' => $pass !== 'unprimed',
                     'queries' => $wpdb->num_queries - $start, 'hash' => hash('sha256', $output),
                     'text_count' => $caller === 'rss' ? substr_count($output, '<teksttv:content>') : count(array_filter($slides, fn($slide) => $slide['type'] === 'text')),
                     'image_count' => $caller === 'rss' ? substr_count($output, '<teksttv:extraImage>') : count(array_filter($slides, fn($slide) => $slide['type'] === 'image')),

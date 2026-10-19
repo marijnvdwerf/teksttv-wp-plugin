@@ -5,6 +5,7 @@ interface Measurement {
     posts: number;
     caller: 'rss' | 'playout';
     cold: boolean;
+    primed: boolean;
     queries: number;
     hash: string;
     text_count: number;
@@ -18,19 +19,37 @@ test('RSS and playout image queries stay bounded with cold and warm attachment c
     runWordPressPHPFile,
 }) => {
     const measurements: Measurement[] = JSON.parse(await runWordPressPHPFile('attachment-cache.php'));
-    expect(measurements).toHaveLength(8);
-    const find = (posts: number, caller: Measurement['caller'], cold: boolean) =>
-        measurements.find((other) => other.posts === posts && other.caller === caller && other.cold === cold);
+    expect(measurements, 'measurements').toHaveLength(10);
+    const find = (posts: number, caller: Measurement['caller'], cold: boolean, primed = true) => {
+        const found = measurements.find(
+            (other) =>
+                other.posts === posts && other.caller === caller && other.cold === cold && other.primed === primed,
+        );
+        if (!found) {
+            throw new Error(`No measurement for ${JSON.stringify({ posts, caller, cold, primed })}`);
+        }
+        return found;
+    };
     for (const measurement of measurements) {
         const label = JSON.stringify(measurement);
-        expect(measurement.queries, label).toBeLessThanOrEqual(8);
-        // Query counts must not grow with the number of articles.
-        expect(measurement.queries, label).toBeLessThanOrEqual(
-            find(5, measurement.caller, measurement.cold)?.queries ?? Number.NaN,
+        expect(measurement.text_count, `${label} text slides`).toBe(measurement.posts);
+        expect(measurement.image_count, `${label} extra images`).toBe(measurement.posts * 2);
+        expect(measurement.sidebar_count, `${label} sidebar images`).toBe(measurement.posts);
+        // Priming and cache state never change the output.
+        expect(measurement.hash, `${label} output matches the primed cold run`).toBe(
+            find(measurement.posts, measurement.caller, true).hash,
         );
-        expect(measurement.text_count).toBe(measurement.posts);
-        expect(measurement.image_count).toBe(measurement.posts * 2);
-        expect(measurement.sidebar_count).toBe(measurement.posts);
-        expect(measurement.hash).toBe(find(measurement.posts, measurement.caller, !measurement.cold)?.hash);
+        if (!measurement.primed) {
+            continue;
+        }
+        expect(measurement.queries, `${label} query bound`).toBeLessThanOrEqual(8);
+        // Query counts must not grow with the number of articles.
+        expect(measurement.queries, `${label} queries match 5 articles`).toBe(
+            find(5, measurement.caller, measurement.cold).queries,
+        );
     }
+    // Positive control: without priming, the benchmark sees the per-image queries.
+    expect(find(20, 'rss', true, false).queries, 'unprimed RSS queries exceed primed').toBeGreaterThan(
+        find(20, 'rss', true).queries,
+    );
 });
