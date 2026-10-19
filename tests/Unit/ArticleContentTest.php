@@ -42,6 +42,13 @@ class ArticleContentTest extends TestCase
         Functions\when('wp_get_attachment_caption')->justReturn('Bijschrift');
     }
 
+    protected function tearDown(): void
+    {
+        // Clear the missing-attachment list.
+        ArticleContent::prime_images([]);
+        parent::tearDown();
+    }
+
     public function test_prepares_title_pages_and_image_data_in_saved_order(): void
     {
         $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), [11], 11, 12]];
@@ -166,68 +173,44 @@ class ArticleContentTest extends TestCase
         // Trashed attachments still resolve in core, so they are not missing.
         Functions\expect('get_posts')->once()->with(\Mockery::on(fn($args) => in_array('trash', $args['post_status'], true)))->andReturn([]);
         Functions\when('wp_get_attachment_image_url')->alias(fn($id) => $id === 999 ? $this->fail('Missing attachment was looked up again.') : 'https://example.com/' . $id . '.jpg');
-        try {
-            ArticleContent::prime_images([$this->post]);
-            $article = ArticleContent::prepare($this->post);
-            $this->assertSame('https://example.com/14.jpg', $article['sidebar_image']['url']);
-            $this->assertSame(['https://example.com/12.jpg', 'https://example.com/12.jpg'], array_column($article['images'], 'url'));
-        } finally {
-            ArticleContent::prime_images([]);
-        }
+        ArticleContent::prime_images([$this->post]);
+        $article = ArticleContent::prepare($this->post);
+        $this->assertSame('https://example.com/14.jpg', $article['sidebar_image']['url']);
+        $this->assertSame(['https://example.com/12.jpg', 'https://example.com/12.jpg'], array_column($article['images'], 'url'));
     }
 
-    /** @return array<string, array{bool, list<int>}> */
+    /** @return array<string, array{bool, bool, list<int>}> */
     public static function uncachedAttachments(): array
     {
         return [
-            'existing attachment the cache did not keep' => [false, [999]],
-            'image filter that resolves IDs without a post' => [true, []],
+            'existing attachment the cache did not keep' => [false, false, [999]],
+            'image filter that resolves IDs without a post' => [true, true, []],
+            'image filter added after priming' => [false, true, []],
         ];
     }
 
     /** Priming must not hide images that rendering without priming would show. */
     #[DataProvider('uncachedAttachments')]
-    public function test_uncached_attachments_are_only_skipped_when_absent(bool $image_filter, array $existing): void
+    public function test_uncached_attachments_are_only_skipped_when_absent(bool $filter_when_priming, bool $filter_when_rendering, array $existing): void
     {
         $this->meta['_teksttv_images'] = [999];
         Functions\when('wp_get_attachment_image_url')->alias(fn($id) => 'https://example.com/' . $id . '.jpg');
         Functions\when('_prime_post_caches')->justReturn(null);
         Functions\when('_get_non_cached_ids')->justReturn([999]);
-        Functions\when('has_filter')->alias(fn($hook) => $image_filter && $hook === 'image_downsize');
         Functions\when('get_posts')->justReturn($existing);
-        try {
-            ArticleContent::prime_images([$this->post]);
-            $this->assertSame('https://example.com/999.jpg', ArticleContent::prepare($this->post)['images'][0]['url']);
-        } finally {
-            ArticleContent::prime_images([]);
-        }
-    }
-
-    public function test_image_filters_added_after_priming_still_resolve_missing_ids(): void
-    {
-        $this->meta['_teksttv_images'] = [999];
-        Functions\when('wp_get_attachment_image_url')->alias(fn($id) => 'https://example.com/' . $id . '.jpg');
-        Functions\when('_prime_post_caches')->justReturn(null);
-        Functions\when('_get_non_cached_ids')->justReturn([999]);
-        Functions\when('get_posts')->justReturn([]);
-        $filters = false;
-        Functions\when('has_filter')->alias(function ($hook) use (&$filters) {
-            return $filters && $hook === 'image_downsize';
+        $filter = $filter_when_priming;
+        Functions\when('has_filter')->alias(function ($hook) use (&$filter) {
+            return $filter && $hook === 'image_downsize';
         });
-        try {
-            ArticleContent::prime_images([$this->post]);
-            $filters = true;
-            $this->assertSame('https://example.com/999.jpg', ArticleContent::prepare($this->post)['images'][0]['url']);
-        } finally {
-            ArticleContent::prime_images([]);
-        }
+        ArticleContent::prime_images([$this->post]);
+        $filter = $filter_when_rendering;
+        $this->assertSame('https://example.com/999.jpg', ArticleContent::prepare($this->post)['images'][0]['url']);
     }
 
     public function test_priming_skips_non_posts_and_inactive_posts(): void
     {
         $this->meta['_teksttv_images'] = [12];
         Functions\expect('_prime_post_caches')->never();
-        Functions\when('_get_non_cached_ids')->justReturn([]);
         ArticleContent::prime_images([(object) ['ID' => $this->post->ID]]);
         $this->meta['_teksttv_active'] = '0';
         ArticleContent::prime_images([$this->post]);
@@ -238,12 +221,8 @@ class ArticleContentTest extends TestCase
         $this->meta['_teksttv_images'] = ['first' => 12, 'second' => 11];
         Functions\expect('_prime_post_caches')->once()->with([12, 11], false, true);
         Functions\when('_get_non_cached_ids')->justReturn([]);
-        try {
-            ArticleContent::prime_images([$this->post]);
-            $article = ArticleContent::prepare($this->post);
-            $this->assertSame(['https://example.com/12.jpg', 'https://example.com/11.jpg'], array_column($article['images'], 'url'));
-        } finally {
-            ArticleContent::prime_images([]);
-        }
+        ArticleContent::prime_images([$this->post]);
+        $article = ArticleContent::prepare($this->post);
+        $this->assertSame(['https://example.com/12.jpg', 'https://example.com/11.jpg'], array_column($article['images'], 'url'));
     }
 }
