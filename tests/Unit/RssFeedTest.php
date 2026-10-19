@@ -425,12 +425,35 @@ class RssFeedTest extends TestCase
     {
         RssFeed::init();
         $this->assertNotFalse(has_action('before_delete_post'));
+        $this->assertNotFalse(has_action('updated_post_meta', [RssFeed::class, 'post_meta_changed']));
+        $this->assertNotFalse(has_action('updated_term_meta', [RssFeed::class, 'meta_changed']));
         foreach (['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset'] as $option) {
             foreach (['add_option_', 'update_option_', 'delete_option_'] as $prefix) {
                 $this->assertNotFalse(has_action($prefix . $option, [RssFeed::class, 'invalidate']), $prefix . $option);
             }
         }
         $this->assertFalse(has_action('update_option_blogname', [RssFeed::class, 'invalidate']));
+    }
+
+    /** @return array<string, array{int, string|false, string|false, bool}> */
+    public static function postMetaTargets(): array
+    {
+        return [
+            'published post' => [42, 'post', 'publish', true],
+            'draft' => [42, 'post', 'draft', false],
+            'published page' => [42, 'page', 'publish', false],
+            'attachment' => [42, 'attachment', 'inherit', true],
+            'delete by key' => [0, false, false, true],
+        ];
+    }
+
+    #[DataProvider('postMetaTargets')]
+    public function test_post_meta_invalidates_only_for_posts_that_reach_the_feed(int $object_id, string|false $type, string|false $status, bool $invalidates): void
+    {
+        Functions\when('get_post_type')->justReturn($type);
+        Functions\when('get_post_status')->justReturn($status);
+        RssFeed::post_meta_changed(['7'], $object_id, '_teksttv_title');
+        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
     }
 
     /** @return array<string, array{string, bool}> */
