@@ -134,4 +134,33 @@ class ArticleContentTest extends TestCase
         $this->assertNull($article['sidebar_image']);
         $this->assertSame('Bijschrift', $article['images'][0]['caption']);
     }
+
+    public function test_primes_filtered_sources_once_and_skips_missing_attachments(): void
+    {
+        $this->meta['_teksttv_images'] = [12, 999, 12];
+        Functions\when('get_the_terms')->justReturn([(object) ['term_id' => 8]]);
+        Functions\when('get_post_thumbnail_id')->justReturn(13);
+        Functions\when('get_term_meta')->alias(fn($id) => $id === 7 ? '10' : '11');
+        $primary_calls = 0;
+        Functions\when('apply_filters')->alias(function ($hook, $value) use (&$primary_calls) {
+            if ($hook === 'teksttv_primary_category') {
+                $primary_calls++;
+                return 7;
+            }
+            return $value;
+        });
+        Functions\expect('update_meta_cache')->once()->with('term', [7, 8]);
+        Functions\expect('_prime_post_caches')->once()->with([13, 12, 999, 10, 11], false, true);
+        Functions\when('wp_cache_get')->alias(fn($id) => $id !== 999);
+        Functions\expect('wp_get_attachment_image_url')->with(999, 'large')->never();
+        try {
+            ArticleContent::prime_images([$this->post]);
+            $article = ArticleContent::prepare($this->post);
+            $this->assertSame('https://example.com/10.jpg', $article['sidebar_image']['url']);
+            $this->assertCount(2, $article['images']);
+            $this->assertSame(1, $primary_calls);
+        } finally {
+            ArticleContent::prime_images([]);
+        }
+    }
 }

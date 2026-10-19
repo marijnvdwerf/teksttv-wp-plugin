@@ -121,6 +121,8 @@ final class ArticlesLoopBlock
                 'ignore_sticky_posts' => true,
             ]));
 
+            ArticleContent::prime_images(array_values(array_filter($query->posts, fn($post) => $post instanceof \WP_Post)));
+
             while ($emitted_post_count < $count && $query->have_posts()) {
                 $query->the_post();
                 $post_id = get_the_ID();

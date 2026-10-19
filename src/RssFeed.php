@@ -56,6 +56,10 @@ final class RssFeed
         if (Helpers::has_feature('rss_feed') && !is_comment_feed()) {
             echo ' xmlns:teksttv="' . esc_url(self::XML_NAMESPACE) . '"';
             self::$namespace_rendered = true;
+            global $wp_query;
+            if ($wp_query instanceof \WP_Query && is_array($wp_query->posts)) {
+                ArticleContent::prime_images(array_values(array_filter($wp_query->posts, fn($post) => $post instanceof \WP_Post)));
+            }
         }
     }
 

@@ -7,6 +7,68 @@ use TekstTV\Blocks\Common\RecentPostsQuery;
 /** Per-post TekstTV rules shared by the playout and RSS; callers choose which posts to expose. */
 final class ArticleContent
 {
+    /** @var array<int, int> Sources resolved once per query batch, including filtered IDs. */
+    private static array $primary_categories = [];
+
+    /** @var array<int, int> */
+    private static array $thumbnails = [];
+
+    /** @var array<int, true> Missing attachments must not trigger a fresh lookup for each slide. */
+    private static array $missing_images = [];
+
+    /**
+     * Prime all attachment posts and metadata referenced by a query in bounded batches.
+     * The article query already primes post metadata and category relationships.
+     *
+     * @param list<\WP_Post> $posts
+     */
+    public static function prime_images(array $posts): void
+    {
+        self::$primary_categories = [];
+        self::$thumbnails = [];
+        self::$missing_images = [];
+        if ($posts === []) {
+            return;
+        }
+
+        $image_ids = [];
+        $term_ids = [];
+        foreach ($posts as $post) {
+            if (Helpers::has_feature('sidebar_image')) {
+                $image_ids[] = get_post_meta($post->ID, '_teksttv_sidebar_image', true);
+            }
+            self::$thumbnails[$post->ID] = self::thumbnail_id($post->ID);
+            self::$primary_categories[$post->ID] = self::primary_category_id($post->ID);
+            $image_ids[] = self::$thumbnails[$post->ID];
+            $term_ids[] = self::$primary_categories[$post->ID];
+            $categories = get_the_terms($post->ID, 'category');
+            foreach (is_array($categories) ? $categories : [] as $category) {
+                $term_ids[] = (int) $category->term_id;
+            }
+            if (Helpers::has_feature('extra_images')) {
+                $extra = get_post_meta($post->ID, '_teksttv_images', true);
+                array_push($image_ids, ...(is_array($extra) ? $extra : []));
+            }
+        }
+
+        $term_ids = array_values(array_unique(array_filter($term_ids)));
+        if ($term_ids !== []) {
+            update_meta_cache('term', $term_ids);
+            foreach ($term_ids as $term_id) {
+                $image_ids[] = get_term_meta($term_id, '_teksttv_category_image', true);
+            }
+        }
+        $image_ids = array_values(array_unique(array_map('intval', array_filter($image_ids, fn($id) => is_numeric($id) && (int) $id > 0))));
+        if ($image_ids !== []) {
+            _prime_post_caches($image_ids, false, true);
+            foreach ($image_ids as $id) {
+                if (!wp_cache_get($id, 'posts')) {
+                    self::$missing_images[$id] = true;
+                }
+            }
+        }
+    }
+
     /**
      * @return array{title: string, pages: list<string>, sidebar_image: array<string, string>|null, images: list<array<string, string>>}|null
      */
@@ -48,7 +110,7 @@ final class ArticleContent
             if (!is_numeric($attachment_id)) {
                 continue;
             }
-            $image = Helpers::get_image_data((int) $attachment_id, 'large', 'image_slide');
+            $image = self::image_data((int) $attachment_id, 'image_slide');
             // A URL filter can intentionally suppress an image.
             if (!empty($image['url'])) {
                 $images[] = $image;
@@ -124,17 +186,16 @@ final class ArticleContent
             }
             // Corrupt meta (arrays, objects) counts as no override.
             if (is_numeric($override_id) && $override_id) {
-                $data = Helpers::get_image_data((int) $override_id, 'large', 'text_sidebar');
+                $data = self::image_data((int) $override_id, 'text_sidebar');
                 if ($data) {
                     return $data;
                 }
             }
         }
 
-        /** @var int|string|false $primary_term_id */
-        $primary_term_id = apply_filters('teksttv_primary_category', get_post_meta($post_id, '_yoast_wpseo_primary_category', true), $post_id);
-        if (is_numeric($primary_term_id) && $primary_term_id) {
-            $data = self::get_category_image_data((int) $primary_term_id);
+        $primary_term_id = self::primary_category_id($post_id);
+        if ($primary_term_id) {
+            $data = self::get_category_image_data($primary_term_id);
             if ($data) {
                 return $data;
             }
@@ -149,11 +210,9 @@ final class ArticleContent
             }
         }
 
-        // Core casts _thumbnail_id to int, which warns for corrupt arrays and objects.
-        $raw_thumb_id = get_post_meta($post_id, '_thumbnail_id', true);
-        $thumb_id = is_array($raw_thumb_id) || is_object($raw_thumb_id) ? 0 : get_post_thumbnail_id($post_id);
+        $thumb_id = self::thumbnail_id($post_id);
         if ($thumb_id) {
-            return Helpers::get_image_data((int) $thumb_id, 'large', 'text_sidebar');
+            return self::image_data($thumb_id, 'text_sidebar');
         }
 
         return null;
@@ -169,6 +228,31 @@ final class ArticleContent
             return null;
         }
 
-        return Helpers::get_image_data((int) $image_id, 'large', 'text_sidebar');
+        return self::image_data((int) $image_id, 'text_sidebar');
+    }
+
+    private static function primary_category_id(int $post_id): int
+    {
+        if (isset(self::$primary_categories[$post_id])) {
+            return self::$primary_categories[$post_id];
+        }
+        $id = apply_filters('teksttv_primary_category', get_post_meta($post_id, '_yoast_wpseo_primary_category', true), $post_id);
+        return is_numeric($id) ? (int) $id : 0;
+    }
+
+    private static function thumbnail_id(int $post_id): int
+    {
+        if (isset(self::$thumbnails[$post_id])) {
+            return self::$thumbnails[$post_id];
+        }
+        // Core casts _thumbnail_id to int, which warns for corrupt arrays and objects.
+        $raw = get_post_meta($post_id, '_thumbnail_id', true);
+        return is_array($raw) || is_object($raw) ? 0 : (int) get_post_thumbnail_id($post_id);
+    }
+
+    /** @return array<string, string>|null */
+    private static function image_data(int $id, string $slot): ?array
+    {
+        return isset(self::$missing_images[$id]) ? null : Helpers::get_image_data($id, 'large', $slot);
     }
 }
