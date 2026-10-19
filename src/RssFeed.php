@@ -39,7 +39,23 @@ final class RssFeed
         // Retain the revision while disabled: turning export off changes the XML too.
         $timestamp = max($modified ? (strtotime($modified . ' GMT') ?: 0) : 0, (int) get_option('teksttv_rss_modified', 0));
         if (Helpers::has_feature('rss_feed')) {
-            $timestamp = max($timestamp, current_datetime()->setTime(0, 0)->getTimestamp());
+            $now = current_datetime();
+            $timestamp = max($timestamp, $now->setTime(0, 0)->getTimestamp());
+            // Age eligibility can expire within the day, without a post save.
+            global $wp_query;
+            $max_age = RecentPostsQuery::max_age_days();
+            if ($max_age > 0 && $wp_query instanceof \WP_Query) {
+                foreach ($wp_query->posts as $post) {
+                    if (!$post instanceof \WP_Post) {
+                        continue;
+                    }
+                    $published = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $post->post_date, wp_timezone());
+                    $expiry = $published ? $published->modify('+' . $max_age . ' days')->getTimestamp() : 0;
+                    if ($expiry <= $now->getTimestamp()) {
+                        $timestamp = max($timestamp, $expiry);
+                    }
+                }
+            }
         }
         return $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : $modified;
     }

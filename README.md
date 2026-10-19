@@ -126,7 +126,8 @@ RSS 2.0 feeds support ETag and Last-Modified conditional requests: unchanged
 polls return 304. Validators advance on post saves, feature or maximum-age
 changes, category images, and direct metadata writes through WordPress APIs.
 While export is enabled they also advance at midnight in the site timezone
-for date and weekday transitions. Direct SQL writes bypass these hooks; importers
+for date and weekday transitions, and when a feed post reaches the maximum age.
+Direct SQL writes bypass these hooks; importers
 must use the WordPress APIs. CDNs may cache feeds, but should revalidate on
 each poll to see these changes promptly.
 

@@ -251,6 +251,23 @@ class RssFeedTest extends TestCase
         $this->assertSame('2026-10-19 10:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
     }
 
+    public function test_age_expiry_advances_the_validator_within_the_same_day(): void
+    {
+        Functions\when('is_feed')->justReturn(true);
+        $query = \Mockery::mock('WP_Query');
+        $this->post->post_date = '2026-09-19 11:59:59';
+        $query->posts = [$this->post];
+        $GLOBALS['wp_query'] = $query;
+        try {
+            Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 11:59:58', new \DateTimeZone('Europe/Amsterdam')));
+            $this->assertSame('2026-10-18 22:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
+            Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 11:59:59', new \DateTimeZone('Europe/Amsterdam')));
+            $this->assertSame('2026-10-19 09:59:59', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
+        } finally {
+            unset($GLOBALS['wp_query']);
+        }
+    }
+
     public function test_other_feeds_and_timezone_formats_keep_core_validator(): void
     {
         Functions\when('is_feed')->justReturn(false);
