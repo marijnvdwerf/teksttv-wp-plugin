@@ -68,7 +68,6 @@ export function requestAiGeneration(
             statusEl.textContent = message;
             statusEl.classList.add('is-error');
         } else {
-            // Errors must never depend on the status element existing.
             console.error('TekstTV AI-generatie:', message);
         }
     };
@@ -87,9 +86,7 @@ export function requestAiGeneration(
     btn.setAttribute('aria-busy', 'true');
     btn.replaceChildren(loadingLabel);
 
-    // Reserve one stable button width before the browser paints, so the button
-    // keeps its size while the loading message changes. Pinned as min-width so
-    // flex shrink in a narrow header row cannot undo it.
+    // Fit every loading message before paint; min-width also prevents flex shrink.
     let loadingWidth = 0;
     for (const message of loadingMessages) {
         loadingLabel.data = message;

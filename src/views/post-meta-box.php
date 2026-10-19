@@ -94,10 +94,7 @@ $has_page_separator = Helpers::has_feature('page_separator');
                                         'underline' => ['inline' => 'u'],
                                     ]),
                                     'forced_root_block' => 'p',
-                                    // Skip WordPress' automatic init: TinyMCE cannot be moved in the
-                                    // DOM once initialized, and the block editor renders metaboxes
-                                    // hidden and moves them into place after mount. JS initializes the
-                                    // editor once it is displayed (see lazyEditor.ts).
+                                    // Gutenberg moves hidden metaboxes; lazyEditor.ts initializes TinyMCE after placement.
                                     'wp_skip_init' => true,
                                     'plugins' => 'lists,paste,wpautoresize',
                                     'wp_autoresize_on' => true,
