@@ -25,7 +25,7 @@ test.describe('RSS 2.0 export', () => {
     test.use({ storageState: { cookies: [], origins: [] } });
     test.afterEach(reseedFixtures);
 
-    test('settings persist the opt-in and restore ordinary RSS caching when disabled', async ({ page, request }) => {
+    test('settings persist the opt-in and invalidate both enabling and disabling export', async ({ page, request }) => {
         const ordinary = await request.get('/?feed=rss2');
         expect(ordinary.status()).toBe(200);
         expect(await ordinary.text()).not.toContain('xmlns:teksttv');
@@ -44,15 +44,19 @@ test.describe('RSS 2.0 export', () => {
             headers: { 'If-None-Match': etag, 'If-Modified-Since': 'Wed, 01 Jan 2098 00:00:00 GMT' },
         });
         expect(enabled.status()).toBe(200);
-        expect(enabled.headers()['cache-control']).toContain('no-store');
-        expect(enabled.headers().etag).toBeUndefined();
-        expect(enabled.headers()['last-modified']).toBeUndefined();
+        expect(enabled.headers()['cache-control'] ?? '').not.toContain('no-store');
+        expect(enabled.headers().etag).toBeTruthy();
+        expect(enabled.headers()['last-modified']).toBeTruthy();
         expect(await enabled.text()).toContain(`xmlns:teksttv="${XML_NAMESPACE}"`);
+        expect(
+            (await request.get('/?feed=rss2', { headers: { 'If-None-Match': enabled.headers().etag } })).status(),
+        ).toBe(304);
 
         await toggle.uncheck();
         await page.click('#submit');
         await expect(toggle).not.toBeChecked();
-        const disabled = await request.get('/?feed=rss2');
+        const disabled = await request.get('/?feed=rss2', { headers: { 'If-None-Match': enabled.headers().etag } });
+        expect(disabled.status()).toBe(200);
         expect(await disabled.text()).not.toContain('xmlns:teksttv');
         expect(disabled.headers().etag).toBeTruthy();
         const cached = await request.get('/?feed=rss2', { headers: { 'If-None-Match': disabled.headers().etag } });
@@ -115,10 +119,14 @@ test.describe('RSS 2.0 export', () => {
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
             update_post_meta($post->ID, '_teksttv_title', 'Nu geldig');
         `);
-        const headers = { 'If-Modified-Since': 'Wed, 01 Jan 2098 00:00:00 GMT' };
-        const first = await request.get('/?feed=rss2', { headers });
+        const first = await request.get('/?feed=rss2');
         expect(first.status()).toBe(200);
         expect(await first.text()).toContain('<teksttv:title>Nu geldig</teksttv:title>');
+        const headers = {
+            'If-None-Match': first.headers().etag,
+            'If-Modified-Since': first.headers()['last-modified'],
+        };
+        expect((await request.get('/?feed=rss2', { headers })).status()).toBe(304);
 
         await runWordPressPHP(`
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
@@ -137,6 +145,88 @@ test.describe('RSS 2.0 export', () => {
         const restored = await request.get('/?feed=rss2', { headers });
         expect(restored.status()).toBe(200);
         expect(await restored.text()).toContain('<teksttv:title>Opnieuw geldig</teksttv:title>');
+    });
+
+    test('post saves and category image changes invalidate conditional requests', async ({
+        request,
+        runWordPressPHP,
+    }) => {
+        await runWordPressPHP(`
+            update_option('teksttv_features', [...\\TekstTV\\Helpers::DEFAULT_FEATURES, 'rss_feed']);
+            update_option('posts_per_rss', 100);
+        `);
+        const first = await request.get('/?feed=rss2');
+        await runWordPressPHP(`
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            wp_update_post(['ID' => $post->ID, 'post_title' => 'Gewijzigd RSS artikel']);
+        `);
+        const saved = await request.get('/?feed=rss2', { headers: { 'If-None-Match': first.headers().etag } });
+        expect(saved.status()).toBe(200);
+        expect(await saved.text()).toContain('Gewijzigd RSS artikel');
+
+        const imageUrl = await runWordPressPHP(`
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            delete_post_meta($post->ID, '_teksttv_sidebar_image');
+            delete_post_meta($post->ID, '_thumbnail_id');
+            $term = wp_get_post_categories($post->ID)[0];
+            delete_term_meta($term, '_teksttv_category_image');
+            $image = get_posts(['post_type' => 'attachment', 'numberposts' => 1])[0];
+            echo wp_get_attachment_image_url($image->ID, 'large');
+        `);
+        const withoutImage = await request.get('/?feed=rss2');
+        expect(await withoutImage.text()).not.toContain('<teksttv:image>');
+        await runWordPressPHP(`
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            $image = get_posts(['post_type' => 'attachment', 'numberposts' => 1])[0];
+            update_term_meta(wp_get_post_categories($post->ID)[0], '_teksttv_category_image', $image->ID);
+        `);
+        const changed = await request.get('/?feed=rss2', { headers: { 'If-None-Match': withoutImage.headers().etag } });
+        expect(changed.status()).toBe(200);
+        expect(await changed.text()).toContain(`<teksttv:image>${imageUrl}</teksttv:image>`);
+        expect(
+            (
+                await request.get('/?feed=rss2', {
+                    headers: { 'If-Modified-Since': changed.headers()['last-modified'] },
+                })
+            ).status(),
+        ).toBe(304);
+    });
+
+    test('site midnight advances validators and re-evaluates scheduling', async ({
+        request,
+        page,
+        runWordPressPHP,
+    }) => {
+        // A temporary mu-plugin supplies a deterministic clock to both scheduling and validators.
+        await runWordPressPHP(`
+            update_option('teksttv_features', [...\\TekstTV\\Helpers::DEFAULT_FEATURES, 'rss_feed']);
+            update_option('posts_per_rss', 100);
+            update_option('timezone_string', 'Europe/Amsterdam');
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            update_post_meta($post->ID, '_teksttv_date_end', '2098-10-25');
+            update_option('teksttv_max_post_age', 0);
+            update_option('teksttv_test_clock', '2098-10-25 23:59:59');
+            wp_mkdir_p(WPMU_PLUGIN_DIR);
+            file_put_contents(WPMU_PLUGIN_DIR . '/rss-clock.php', '<?php namespace TekstTV; function current_datetime() { return new \\DateTimeImmutable(\\get_option("teksttv_test_clock"), new \\DateTimeZone("Europe/Amsterdam")); }');
+        `);
+        try {
+            const before = await request.get('/?feed=rss2');
+            const beforeItems = await readFeed(page, await before.text());
+            expect(beforeItems.find((item) => item.title === 'TekstTV Smoke Post')?.teksttv.length).toBeGreaterThan(0);
+            expect(
+                (await request.get('/?feed=rss2', { headers: { 'If-None-Match': before.headers().etag } })).status(),
+            ).toBe(304);
+            await runWordPressPHP("update_option('teksttv_test_clock', '2098-10-26 00:00:00');");
+            const after = await request.get('/?feed=rss2', { headers: { 'If-None-Match': before.headers().etag } });
+            expect(after.status()).toBe(200);
+            expect(after.headers()['last-modified']).not.toBe(before.headers()['last-modified']);
+            const afterItems = await readFeed(page, await after.text());
+            expect(afterItems.find((item) => item.title === 'TekstTV Smoke Post')?.teksttv).toEqual([]);
+        } finally {
+            await runWordPressPHP(
+                "unlink(WPMU_PLUGIN_DIR . '/rss-clock.php'); delete_option('teksttv_test_clock'); update_option('teksttv_max_post_age', 30);",
+            );
+        }
     });
 
     test('Atom and comment feeds remain unchanged when RSS export is enabled', async ({ request, runWordPressPHP }) => {

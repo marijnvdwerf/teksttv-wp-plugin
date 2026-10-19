@@ -122,11 +122,13 @@ item: if its TekstTV fields disappear, remove that item's imported TekstTV
 version. Missing fields do not remove the ordinary RSS item. Items that leave
 the feed window need a retention policy on the receiving narrowcaster.
 
-While enabled, RSS 2.0 feeds are served without caching or conditional 304
-responses, so date/weekday transitions and changes that do not save a post
-(settings, category images) show up on the next poll. Any hosting/CDN cache must also respect these no-cache headers or
-bypass these feed URLs. With the feature disabled, normal WordPress feed
-caching applies again.
+RSS 2.0 feeds support ETag and Last-Modified conditional requests: unchanged
+polls return 304. Validators advance on post saves, feature or maximum-age
+changes, category images, and direct metadata writes through WordPress APIs.
+While export is enabled they also advance at midnight in the site timezone
+for date and weekday transitions. Direct SQL writes bypass these hooks; importers
+must use the WordPress APIs. CDNs may cache feeds, but should revalidate on
+each poll to see these changes promptly.
 
 ## REST API
 

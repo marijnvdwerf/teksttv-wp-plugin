@@ -125,7 +125,7 @@ $render_feature_option = static function (string $value, string $label) use ($fe
 
         <div class="teksttv-card">
             <h2><?php echo esc_html('RSS'); ?></h2>
-            <p class="description"><?php echo esc_html('Voeg de Tekst TV-kop, tekst en afbeeldingen toe aan bestaande RSS 2.0-feeds. Alleen gepubliceerde berichten zonder wachtwoord met "Toon op Tekst TV" aan en binnen de maximale leeftijd krijgen deze extra velden; staat Planning aan, dan alleen binnen de ingestelde datums en dagen. RSS 2.0-feeds worden dan niet meer gecachet.'); ?></p>
+            <p class="description"><?php echo esc_html('Voeg de Tekst TV-kop, tekst en afbeeldingen toe aan bestaande RSS 2.0-feeds. Alleen gepubliceerde berichten zonder wachtwoord met "Toon op Tekst TV" aan en binnen de maximale leeftijd krijgen deze extra velden; staat Planning aan, dan alleen binnen de ingestelde datums en dagen. RSS blijft cachebaar: ongewijzigde aanvragen geven 304. Wijzigingen en de dagelijkse datumwissel verversen de cachevalidatie; laat een CDN bij elke poll opnieuw valideren.'); ?></p>
             <?php $render_feature_option('rss_feed', 'TekstTV opnemen in RSS'); ?>
         </div>
 
