@@ -143,7 +143,7 @@ add_filter(
 );
 ```
 
-The callback receives the fallback URL, attachment ID and semantic slot. Return a URL string.
+The callback receives the fallback URL, attachment ID and semantic slot. Return a URL string. Returning `''` omits the image from article slides and the RSS export; an empty `text_sidebar` URL removes the sidebar image instead of falling back to the next source.
 
 ### Image attribution
 
@@ -180,6 +180,10 @@ add_filter(
 ```
 
 Return a category term ID or `false` to continue with the post's assigned categories and featured image.
+
+## RSS validators
+
+RSS 2.0 feeds answer conditional requests. The validators advance automatically for the changes listed in the [README](README.md#rss-export). When a filter's inputs change otherwise, such as `_station_primary_category` above or a new `teksttv_image_url` mapping, call `\TekstTV\RssFeed::invalidate()` so feed readers fetch the new XML.
 
 ## Weather provider
 

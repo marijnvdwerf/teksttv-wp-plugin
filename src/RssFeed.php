@@ -3,7 +3,6 @@
 namespace TekstTV;
 
 use TekstTV\Blocks\Common\RecentPostsQuery;
-use TekstTV\Blocks\Loop\ArticlesLoopBlock;
 
 final class RssFeed
 {
@@ -15,41 +14,128 @@ final class RssFeed
     {
         add_action('rss2_ns', [self::class, 'render_namespace']);
         add_action('rss2_item', [self::class, 'render_item']);
-        // Run last so the decision sees the final feed query.
-        add_action('pre_get_posts', [self::class, 'prepare_request'], PHP_INT_MAX);
-        add_filter('wp_headers', [self::class, 'filter_headers']);
+        add_filter('get_lastpostmodified', [self::class, 'last_modified'], 10, 2);
+        // A value supplied by another plugin skips the filter above.
+        add_filter('pre_get_lastpostmodified', static fn($pre, $timezone) => is_string($pre) ? self::last_modified($pre, $timezone) : $pre, PHP_INT_MAX, 2);
+        add_filter('wp_headers', [self::class, 'feed_headers']);
+        foreach (['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset', 'posts_per_rss'] as $option) {
+            foreach (['add_option_', 'update_option_', 'delete_option_'] as $prefix) {
+                add_action($prefix . $option, [self::class, 'invalidate']);
+            }
+        }
+        foreach (['added', 'updated', 'deleted'] as $action) {
+            add_action($action . '_post_meta', [self::class, 'post_meta_changed'], 10, 3);
+            add_action($action . '_term_meta', [self::class, 'meta_changed'], 10, 3);
+        }
+        add_action('transition_post_status', [self::class, 'post_transitioned'], 10, 3);
+        // Force deletes fire no status transition; invalidate once the row is gone.
+        add_action('after_delete_post', static fn($post_id, $post) => self::post_transitioned('delete', $post->post_status, $post), 10, 2);
+        // Term changes without a post save change the feed's categories and the sidebar image.
+        add_action('set_object_terms', static fn($post_id, $terms, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 4);
+        add_action('deleted_term_relationships', static fn($post_id, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 3);
+        // Category names order the sidebar image fallback.
+        add_action('edited_category', [self::class, 'invalidate']);
     }
 
     /**
-     * Drop the conditional request headers so core cannot answer 304.
-     *
-     * Core compares them with the last post modification before wp_headers runs.
-     * That date misses date/weekday transitions and changes that do not save a
-     * post, such as settings and category images.
+     * Core derives feed Last-Modified and ETag from this value in WP::send_headers();
+     * raise it for changes that do not save a published post.
      */
-    public static function prepare_request(\WP_Query $query): void
+    public static function last_modified(string|false $modified, string $timezone): string|false
     {
-        if (
-            $query->is_main_query() && $query->is_feed('rss2') && !$query->is_comment_feed
-            && Helpers::has_feature('rss_feed')
-        ) {
-            unset($_SERVER['HTTP_IF_NONE_MATCH'], $_SERVER['HTTP_IF_MODIFIED_SINCE']);
+        if (strtolower($timezone) !== 'gmt' || !is_feed('rss2') || is_comment_feed()) {
+            return $modified;
+        }
+
+        // Retain the revision while disabled: turning export off changes the XML too.
+        $timestamp = max($modified ? (int) strtotime($modified . ' GMT') : 0, (int) get_option('teksttv_rss_modified', 0));
+        $now = current_datetime();
+        if (Helpers::has_feature('rss_feed')) {
+            $timestamp = max($timestamp, $now->setTime(0, 0)->getTimestamp());
+            // Age eligibility can expire within the day, without a post save.
+            global $wp_query;
+            foreach ($wp_query instanceof \WP_Query ? $wp_query->posts ?? [] : [] as $post) {
+                $expiry = $post instanceof \WP_Post ? RecentPostsQuery::expires_at($post) : null;
+                if ($expiry !== null && $expiry <= $now->getTimestamp()) {
+                    $timestamp = max($timestamp, $expiry);
+                }
+            }
+        }
+        // Never in the future (RFC 9110): a revision ahead of the clock would absorb midnight and expiry.
+        // Never past the request start either: a write after this request read its data gets a later revision.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- server-set request start, cast to int.
+        $timestamp = min($timestamp, $now->getTimestamp(), (int) ($_SERVER['REQUEST_TIME'] ?? PHP_INT_MAX));
+        return $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : $modified;
+    }
+
+    /** @param int|array<int|string> $meta_ids */
+    public static function meta_changed(int|array $meta_ids, int $object_id, string $key): void
+    {
+        if (self::tracked_key($key)) {
+            self::invalidate();
         }
     }
 
     /**
-     * Send no-cache headers and drop the ETag, which wp_get_nocache_headers() keeps.
+     * Only attachments (feed images) and published posts matter; drafts reach the feed through
+     * a publish transition. Object ID 0 is delete_post_meta_by_key().
      *
-     * @param array<string, string|false> $headers
-     * @return array<string, string|false>
+     * @param int|array<int|string> $meta_ids
      */
-    public static function filter_headers(array $headers): array
+    public static function post_meta_changed(int|array $meta_ids, int $object_id, string $key): void
     {
-        if (is_feed('rss2') && !is_comment_feed() && Helpers::has_feature('rss_feed')) {
-            $headers = array_merge($headers, wp_get_nocache_headers());
-            unset($headers['ETag']);
+        if (self::tracked_key($key) && ($object_id === 0 || get_post_type($object_id) === 'attachment' || self::in_feed($object_id))) {
+            self::invalidate();
         }
+    }
 
+    private static function tracked_key(string $key): bool
+    {
+        return (str_starts_with($key, '_teksttv_') && !str_starts_with($key, '_teksttv_ai_')) || in_array($key, ['_thumbnail_id', '_yoast_wpseo_primary_category', '_wp_attachment_metadata', '_wp_attached_file'], true);
+    }
+
+    /** Saved and unpublished posts; core's date only covers posts that remain published. */
+    public static function post_transitioned(string $new_status, string $old_status, \WP_Post $post): void
+    {
+        if ($post->post_type === 'post' && ($new_status === 'publish' || $old_status === 'publish')) {
+            self::invalidate();
+        }
+    }
+
+    public static function terms_changed(int $post_id, string $taxonomy): void
+    {
+        if (in_array($taxonomy, ['category', 'post_tag'], true) && self::in_feed($post_id)) {
+            self::invalidate();
+        }
+    }
+
+    private static function in_feed(int $post_id): bool
+    {
+        return get_post_type($post_id) === 'post' && get_post_status($post_id) === 'publish';
+    }
+
+    /**
+     * Every validator served so far is capped at its request's start and at now, so a revision
+     * one second ahead of now is newer than all of them, also for several writes within a second.
+     */
+    public static function invalidate(): void
+    {
+        update_option('teksttv_rss_modified', max(time() + 1, (int) get_option('teksttv_rss_modified', 0)), false);
+    }
+
+    /**
+     * Validators alone allow heuristic freshness (RFC 9111), so make caches revalidate every poll;
+     * a stricter or explicit policy from another plugin keeps its directives.
+     *
+     * @param array<string, string> $headers
+     * @return array<string, string>
+     */
+    public static function feed_headers(array $headers): array
+    {
+        $cache = $headers['Cache-Control'] ?? '';
+        if (is_feed('rss2') && !is_comment_feed() && Helpers::has_feature('rss_feed') && !preg_match('/(^|,)\s*no-(cache|store)\s*(,|$)/i', $cache)) {
+            $headers['Cache-Control'] = ltrim($cache . ', no-cache', ', ');
+        }
         return $headers;
     }
 
@@ -59,6 +145,11 @@ final class RssFeed
         if (Helpers::has_feature('rss_feed') && !is_comment_feed()) {
             echo ' xmlns:teksttv="' . esc_url(self::XML_NAMESPACE) . '"';
             self::$namespace_rendered = true;
+            // rss2_ns fires once before the item loop, so prime the feed's images here.
+            global $wp_query;
+            if ($wp_query instanceof \WP_Query && is_array($wp_query->posts)) {
+                ArticleContent::prime_images($wp_query->posts);
+            }
         }
     }
 
@@ -70,59 +161,24 @@ final class RssFeed
         }
 
         $post = get_post();
-        if (
-            !$post || $post->post_type !== 'post' || $post->post_status !== 'publish'
-            || $post->post_password !== ''
-            || get_post_meta($post->ID, '_teksttv_active', true) !== '1'
-        ) {
+        // RSS is public; the playout deliberately also accepts password-protected posts.
+        if (!$post || $post->post_type !== 'post' || $post->post_status !== 'publish' || $post->post_password !== '') {
             return;
         }
 
-        // Same exclusive cutoff as the playout's date_query: calendar days in the site timezone.
-        $max_age = RecentPostsQuery::max_age_days();
-        if ($max_age > 0 && $post->post_date <= current_datetime()->modify('-' . $max_age . ' days')->format('Y-m-d H:i:s')) {
+        $article = ArticleContent::prepare($post);
+        if ($article === null) {
             return;
         }
-
-        $scheduled = !Helpers::has_feature('scheduling') || Helpers::is_block_scheduled([
-            'date_start' => (string) get_post_meta($post->ID, '_teksttv_date_start', true),
-            'date_end' => (string) get_post_meta($post->ID, '_teksttv_date_end', true),
-            'days' => get_post_meta($post->ID, '_teksttv_days', true),
-        ]);
-        if (!$scheduled) {
-            return;
+        self::render_element('title', html_entity_decode($article['title'], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
+        if ($article['pages'] !== []) {
+            self::render_element('content', implode("\n<hr />\n", array_map('wpautop', $article['pages'])), true);
         }
-
-        $pages = ArticlesLoopBlock::split_pages((string) get_post_meta($post->ID, '_teksttv_content', true));
-        $images = [];
-        $attachment_ids = Helpers::has_feature('extra_images') ? get_post_meta($post->ID, '_teksttv_images', true) : [];
-        foreach (is_array($attachment_ids) ? $attachment_ids : [] as $attachment_id) {
-            $image = Helpers::get_image_data((int) $attachment_id, 'large', 'image_slide');
-            if (!empty($image['url'])) {
-                $images[] = $image['url'];
-            }
+        if ($article['sidebar_image'] !== null) {
+            self::render_element('image', $article['sidebar_image']['url']);
         }
-
-        // Like the playout, image-only posts are exported.
-        if ($pages === [] && $images === []) {
-            return;
-        }
-
-        $override = Helpers::has_feature('custom_title') ? get_post_meta($post->ID, '_teksttv_title', true) : '';
-        $title = !empty($override) ? (string) $override : get_the_title($post);
-        self::render_element('title', html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
-
-        if ($pages !== []) {
-            $body = implode("\n<hr />\n", array_map('wpautop', $pages));
-            self::render_element('content', $body, true);
-            $image = ArticlesLoopBlock::get_sidebar_image_data($post->ID);
-            if (!empty($image['url'])) {
-                self::render_element('image', $image['url']);
-            }
-        }
-
-        foreach ($images as $url) {
-            self::render_element('extraImage', $url);
+        foreach ($article['images'] as $image) {
+            self::render_element('extraImage', $image['url']);
         }
     }
 

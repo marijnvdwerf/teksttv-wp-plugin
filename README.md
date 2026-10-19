@@ -104,8 +104,9 @@ URI and local name, rather than relying on the `teksttv` prefix.
 - Only published, non-password-protected posts with **Toon op Tekst TV** enabled
   receive TekstTV fields, and only while they are within **Maximale leeftijd
   berichten**. If scheduling is enabled, their start/end dates (inclusive) and
-  allowed weekdays must match the current WordPress site date.
-  As in the playout, disabled features ignore their stored post meta.
+  allowed weekdays must match the current WordPress site date; invalid stored
+  dates or weekdays exclude the post. Disabled features ignore their stored post
+  meta.
 - `title` is plain text: the custom TekstTV title when that feature is enabled
   and a title is set, otherwise the post title.
 - `content` contains the TekstTV HTML with paragraphs, wrapped in CDATA. When
@@ -117,16 +118,22 @@ URI and local name, rather than relying on the `teksttv` prefix.
   Image-only posts receive only `title` and `extraImage`; posts with neither
   text nor usable extra images receive no TekstTV fields.
 
+The playout uses the same per-post rules, but selects posts per articles block
+(taxonomy filters, count), skips posts already shown in the loop, and also shows
+password-protected posts.
+
 Poll the feed regularly and replace the imported TekstTV data for each returned
 item: if its TekstTV fields disappear, remove that item's imported TekstTV
 version. Missing fields do not remove the ordinary RSS item. Items that leave
 the feed window need a retention policy on the receiving narrowcaster.
 
-While enabled, RSS 2.0 feeds are served without caching or conditional 304
-responses, so date/weekday transitions and changes that do not save a post
-(settings, category images) show up on the next poll. Any hosting/CDN cache must also respect these no-cache headers or
-bypass these feed URLs. With the feature disabled, normal WordPress feed
-caching applies again.
+RSS 2.0 feeds answer conditional requests (ETag, Last-Modified) with 304 while
+unchanged and send `Cache-Control: no-cache`, so caches revalidate every poll.
+Writes through WordPress APIs that can change the TekstTV output of published
+posts, the TekstTV settings or category images advance the validators from the
+next second; while export is enabled, so do local midnight and posts reaching
+the maximum age. Direct SQL writes are not detected. Other feed content follows
+WordPress's own validator.
 
 ## REST API
 

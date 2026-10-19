@@ -31,7 +31,8 @@ if (!defined('WEEK_IN_SECONDS')) {
 if (!function_exists('sanitize_text_field')) {
     function sanitize_text_field(string $str): string
     {
-        return trim(strip_tags($str));
+        // Like core: tags are only stripped when the string contains '<', so NUL bytes survive.
+        return trim(str_contains($str, '<') ? strip_tags($str) : $str);
     }
 }
 

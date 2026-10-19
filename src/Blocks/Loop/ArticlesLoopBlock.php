@@ -3,6 +3,7 @@
 namespace TekstTV\Blocks\Loop;
 
 use TekstTV\AdminPage;
+use TekstTV\ArticleContent;
 use TekstTV\BlockRegistry;
 use TekstTV\Blocks\BuildContext;
 use TekstTV\Blocks\Common\DurationField;
@@ -93,22 +94,19 @@ final class ArticlesLoopBlock
         $count = Helpers::clamp_int($block['count'] ?? 3, 1, 50);
         $taxonomy_filters = $block['taxonomy_filters'] ?? [];
 
-        // Disabled features ignore their retained post meta.
-        $scheduling = Helpers::has_feature('scheduling');
-        $custom_title = Helpers::has_feature('custom_title');
-        $extra_images = Helpers::has_feature('extra_images');
-
         $meta_query = [
             'relation' => 'AND',
             ['key' => '_teksttv_active', 'value' => '1', 'compare' => '='],
         ];
-        if ($scheduling) {
+        if (Helpers::has_feature('scheduling')) {
+            // SQL pre-filter only; ArticleContent::prepare() is authoritative.
             $meta_query[] = Helpers::get_date_range_meta_query();
         }
 
         $text_duration = Helpers::duration_ms($block['duration_text'] ?? null, 'teksttv_duration_text');
         $image_duration = Helpers::duration_ms($block['duration_image'] ?? null, 'teksttv_duration_image');
         $batch_size = max(10, $count);
+        $max_age = RecentPostsQuery::max_age_days();
         // Keep post__not_in fixed so pagination does not grow SQL/cache keys.
         $seen_post_ids = BuildContext::get_seen_post_ids();
         $emitted_post_count = 0;
@@ -116,66 +114,41 @@ final class ArticlesLoopBlock
         for ($batch = 0; $batch < self::MAX_QUERY_BATCHES && $emitted_post_count < $count; $batch++) {
             $query = new WP_Query(RecentPostsQuery::args($batch_size, $taxonomy_filters, [
                 'meta_query' => $meta_query,
+                // A day wider than prepare()'s expires_at(), so a DST shift cannot hide an eligible post.
+                'date_query' => $max_age > 0 ? [['after' => ($max_age + 1) . ' days ago']] : [],
                 'post__not_in' => $seen_post_ids,
                 'paged' => $batch + 1,
                 'orderby' => ['date' => 'DESC', 'ID' => 'DESC'],
                 'ignore_sticky_posts' => true,
             ]));
 
+            ArticleContent::prime_images($query->posts);
+
             while ($emitted_post_count < $count && $query->have_posts()) {
                 $query->the_post();
-                $post_id = get_the_ID();
-
-                if ($scheduling) {
-                    $days = Helpers::normalize_days(get_post_meta($post_id, '_teksttv_days', true));
-                    if (!Helpers::is_allowed_on_day($days)) {
-                        continue;
-                    }
-                }
-
-                $post_slides = [];
-                $content = get_post_meta($post_id, '_teksttv_content', true);
-
-                if (!empty($content)) {
-                    $title_override = $custom_title ? get_post_meta($post_id, '_teksttv_title', true) : '';
-                    $title = !empty($title_override) ? $title_override : get_the_title();
-                    $sidebar_image = self::get_sidebar_image_data($post_id);
-                    $pages = self::split_pages($content);
-                    foreach ($pages as $page_content) {
-                        $slide = [
-                            'type' => 'text',
-                            'duration' => $text_duration,
-                            'title' => $title,
-                            'body' => wpautop($page_content),
-                        ];
-
-                        if (!empty($sidebar_image)) {
-                            $slide['image'] = $sidebar_image;
-                        }
-
-                        $post_slides[] = $slide;
-                    }
-                }
-
-                $images = $extra_images ? get_post_meta($post_id, '_teksttv_images', true) : [];
-                if (!empty($images) && is_array($images)) {
-                    foreach ($images as $attachment_id) {
-                        $image_data = Helpers::get_image_data((int) $attachment_id, 'large', 'image_slide');
-                        if ($image_data) {
-                            $post_slides[] = array_merge([
-                                'type' => 'image',
-                                'duration' => $image_duration,
-                            ], $image_data);
-                        }
-                    }
-                }
-
-                if ($post_slides === []) {
+                $post = get_post();
+                $article = $post ? ArticleContent::prepare($post) : null;
+                if ($article === null) {
                     continue;
                 }
 
-                array_push($slides, ...$post_slides);
-                BuildContext::mark_post_seen((int) $post_id);
+                foreach ($article['pages'] as $page_content) {
+                    $slide = [
+                        'type' => 'text',
+                        'duration' => $text_duration,
+                        'title' => $article['title'],
+                        'body' => wpautop($page_content),
+                    ];
+                    if ($article['sidebar_image'] !== null) {
+                        $slide['image'] = $article['sidebar_image'];
+                    }
+                    $slides[] = $slide;
+                }
+                foreach ($article['images'] as $image) {
+                    $slides[] = array_merge(['type' => 'image', 'duration' => $image_duration], $image);
+                }
+
+                BuildContext::mark_post_seen($post->ID);
                 $emitted_post_count++;
             }
 
@@ -186,88 +159,5 @@ final class ArticlesLoopBlock
         }
 
         return $slides;
-    }
-
-    /**
-     * Split content into non-empty pages.
-     *
-     * @return list<string>
-     */
-    public static function split_pages(string $content): array
-    {
-        if (!Helpers::has_feature('page_separator')) {
-            $trimmed = trim($content);
-            return $trimmed !== '' ? [$trimmed] : [];
-        }
-
-        $parts = preg_split('/<p[^>]*>\s*-{3,}\s*<\/p>|(?:^|\R)[ \t]*-{3,}[ \t]*(?=\R|$)/i', $content);
-        $pages = [];
-        foreach ($parts as $part) {
-            $part = trim($part);
-            if ($part !== '') {
-                $pages[] = $part;
-            }
-        }
-        return $pages;
-    }
-
-    /**
-     * Get sidebar image data for a post.
-     *
-     * @return array<string, string>|null
-     */
-    public static function get_sidebar_image_data(int $post_id): ?array
-    {
-        // A disabled feature ignores its stored override, including '0'.
-        if (Helpers::has_feature('sidebar_image')) {
-            $override_id = get_post_meta($post_id, '_teksttv_sidebar_image', true);
-            if ($override_id === '0' || $override_id === 0) {
-                return null;
-            }
-            if ($override_id) {
-                $data = Helpers::get_image_data((int) $override_id, 'large', 'text_sidebar');
-                if ($data) {
-                    return $data;
-                }
-            }
-        }
-
-        /** @var int|string|false $primary_term_id */
-        $primary_term_id = apply_filters('teksttv_primary_category', get_post_meta($post_id, '_yoast_wpseo_primary_category', true), $post_id);
-        if ($primary_term_id) {
-            $data = self::get_category_image_data((int) $primary_term_id);
-            if ($data) {
-                return $data;
-            }
-        }
-
-        // Reuse the object-term cache primed by the articles query.
-        $categories = get_the_terms($post_id, 'category');
-        foreach (is_array($categories) ? $categories : [] as $cat) {
-            $data = self::get_category_image_data((int) $cat->term_id);
-            if ($data) {
-                return $data;
-            }
-        }
-
-        $thumb_id = get_post_thumbnail_id($post_id);
-        if ($thumb_id) {
-            return Helpers::get_image_data((int) $thumb_id, 'large', 'text_sidebar');
-        }
-
-        return null;
-    }
-
-    /**
-     * @return array<string, string>|null
-     */
-    private static function get_category_image_data(int $term_id): ?array
-    {
-        $image_id = get_term_meta($term_id, '_teksttv_category_image', true);
-        if (!$image_id) {
-            return null;
-        }
-
-        return Helpers::get_image_data((int) $image_id, 'large', 'text_sidebar');
     }
 }

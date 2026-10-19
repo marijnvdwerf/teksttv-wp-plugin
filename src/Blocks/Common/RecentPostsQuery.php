@@ -49,4 +49,19 @@ final class RecentPostsQuery
     {
         return (int) get_option('teksttv_max_post_age', 30);
     }
+
+    /**
+     * When a post leaves the age window: its local publish time plus the maximum age in
+     * calendar days, like the date_query above. Null without a limit; 0 (already expired)
+     * when the post date is unusable.
+     */
+    public static function expires_at(\WP_Post $post): ?int
+    {
+        $max_age = self::max_age_days();
+        if ($max_age <= 0) {
+            return null;
+        }
+        $published = get_post_datetime($post);
+        return $published ? $published->modify('+' . $max_age . ' days')->getTimestamp() : 0;
+    }
 }
