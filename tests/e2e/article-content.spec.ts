@@ -32,9 +32,8 @@ test('playout and RSS apply the shared article rules with explicit password poli
                     update_post_meta($post->ID, $key, $value);
                 }
                 wp_update_post(['ID' => $post->ID, 'post_password' => $name === 'password' ? 'secret' : '']);
-                $filter = static fn() => '';
                 if ($name === 'suppressed images') {
-                    add_filter('teksttv_image_url', $filter);
+                    add_filter('teksttv_image_url', '__return_empty_string');
                 }
                 \\TekstTV\\Blocks\\BuildContext::reset();
                 $slides = \\TekstTV\\Blocks\\Loop\\ArticlesLoopBlock::build(['count' => 1]);
@@ -44,7 +43,7 @@ test('playout and RSS apply the shared article rules with explicit password poli
                 ob_clean();
                 \\TekstTV\\RssFeed::render_item();
                 $results[$name] = ['slides' => $slides, 'rss' => ob_get_clean()];
-                remove_filter('teksttv_image_url', $filter);
+                remove_filter('teksttv_image_url', '__return_empty_string');
             }
             wp_update_post(['ID' => $post->ID, 'post_password' => '']);
             echo wp_json_encode($results);

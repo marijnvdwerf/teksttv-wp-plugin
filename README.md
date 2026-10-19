@@ -105,8 +105,8 @@ URI and local name, rather than relying on the `teksttv` prefix.
   receive TekstTV fields, and only while they are within **Maximale leeftijd
   berichten**. If scheduling is enabled, their start/end dates (inclusive) and
   allowed weekdays must match the current WordPress site date; invalid stored
-  dates or weekdays exclude the post. As in the playout, disabled features
-  ignore their stored post meta.
+  dates or weekdays exclude the post. Disabled features ignore their stored post
+  meta.
 - `title` is plain text: the custom TekstTV title when that feature is enabled
   and a title is set, otherwise the post title.
 - `content` contains the TekstTV HTML with paragraphs, wrapped in CDATA. When

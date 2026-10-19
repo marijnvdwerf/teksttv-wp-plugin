@@ -17,8 +17,6 @@ class RssFeedTest extends TestCase
 
     private \WP_Post $post;
 
-    private int $max_age = 30;
-
     protected function setUp(): void
     {
         parent::setUp();
@@ -35,7 +33,6 @@ class RssFeedTest extends TestCase
 
         Functions\when('get_option')->alias(fn($key, $default = false) => match ($key) {
             'teksttv_features' => $this->features,
-            'teksttv_max_post_age' => $this->max_age,
             default => $default,
         });
         Functions\when('get_post')->alias(fn() => $this->post);
@@ -47,7 +44,6 @@ class RssFeedTest extends TestCase
         Functions\when('wpautop')->alias(fn($value) => '<p>' . $value . '</p>');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('TekstTV\\time')->justReturn(strtotime('2026-10-19 10:00:00 GMT'));
-        Functions\when('wp_timezone')->justReturn(new \DateTimeZone('Europe/Amsterdam'));
         Functions\when('get_post_datetime')->alias(fn($post) => \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $post->post_date, new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('get_the_terms')->justReturn(false);
         Functions\when('get_post_thumbnail_id')->justReturn(false);
@@ -253,7 +249,6 @@ class RssFeedTest extends TestCase
         Functions\when('get_option')->alias(function ($key, $default = false) use (&$stored) {
             return match ($key) {
                 'teksttv_features' => $this->features,
-                'teksttv_max_post_age' => $this->max_age,
                 'teksttv_rss_modified' => $stored,
                 default => $default,
             };

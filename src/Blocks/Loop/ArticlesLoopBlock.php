@@ -94,14 +94,11 @@ final class ArticlesLoopBlock
         $count = Helpers::clamp_int($block['count'] ?? 3, 1, 50);
         $taxonomy_filters = $block['taxonomy_filters'] ?? [];
 
-        // Disabled features ignore their retained post meta.
-        $scheduling = Helpers::has_feature('scheduling');
-
         $meta_query = [
             'relation' => 'AND',
             ['key' => '_teksttv_active', 'value' => '1', 'compare' => '='],
         ];
-        if ($scheduling) {
+        if (Helpers::has_feature('scheduling')) {
             // SQL pre-filter only; ArticleContent::prepare() is authoritative.
             $meta_query[] = Helpers::get_date_range_meta_query();
         }
@@ -143,10 +140,7 @@ final class ArticlesLoopBlock
                     $slides[] = $slide;
                 }
                 foreach ($article['images'] as $image) {
-                    $slides[] = array_merge([
-                        'type' => 'image',
-                        'duration' => $image_duration,
-                    ], $image);
+                    $slides[] = array_merge(['type' => 'image', 'duration' => $image_duration], $image);
                 }
 
                 BuildContext::mark_post_seen($post->ID);
