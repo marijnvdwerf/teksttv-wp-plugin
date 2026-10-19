@@ -18,7 +18,10 @@ final class RssFeed
         add_action('rss2_ns', [self::class, 'render_namespace']);
         add_action('rss2_item', [self::class, 'render_item']);
         add_filter('get_lastpostmodified', [self::class, 'last_modified'], 10, 2);
-        foreach (['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset'] as $option) {
+        // A value supplied by another plugin skips the filter above.
+        add_filter('pre_get_lastpostmodified', static fn($pre, $timezone) => is_string($pre) ? self::last_modified($pre, $timezone) : $pre, PHP_INT_MAX, 2);
+        add_filter('wp_headers', [self::class, 'feed_headers']);
+        foreach (['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset', 'posts_per_rss'] as $option) {
             foreach (['add_option_', 'update_option_', 'delete_option_'] as $prefix) {
                 add_action($prefix . $option, [self::class, 'invalidate']);
             }
@@ -33,6 +36,8 @@ final class RssFeed
         // Term changes without a post save change the feed's categories and the sidebar image.
         add_action('set_object_terms', static fn($post_id, $terms, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 4);
         add_action('deleted_term_relationships', static fn($post_id, $tt_ids, $taxonomy) => self::terms_changed((int) $post_id, $taxonomy), 10, 3);
+        // Category names order the sidebar image fallback.
+        add_action('edited_category', [self::class, 'invalidate']);
     }
 
     /**
@@ -52,7 +57,7 @@ final class RssFeed
             $timestamp = max($timestamp, $now->setTime(0, 0)->getTimestamp());
             // Age eligibility can expire within the day, without a post save.
             global $wp_query;
-            foreach ($wp_query instanceof \WP_Query ? $wp_query->posts : [] as $post) {
+            foreach ($wp_query instanceof \WP_Query ? $wp_query->posts ?? [] : [] as $post) {
                 $expiry = $post instanceof \WP_Post ? RecentPostsQuery::expires_at($post) : null;
                 if ($expiry !== null && $expiry <= $now->getTimestamp()) {
                     $timestamp = max($timestamp, $expiry);
@@ -60,29 +65,36 @@ final class RssFeed
             }
         }
         // Never in the future (RFC 9110): a revision ahead of the clock would absorb midnight and expiry.
-        $timestamp = min($timestamp, $now->getTimestamp());
+        // Never past the request start either: a write after this request read its data gets a later revision.
+        // phpcs:ignore WordPress.Security.ValidatedSanitizedInput -- server-set request start, cast to int.
+        $timestamp = min($timestamp, $now->getTimestamp(), (int) ($_SERVER['REQUEST_TIME'] ?? PHP_INT_MAX));
         return $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : $modified;
     }
 
     /** @param int|array<int|string> $meta_ids */
     public static function meta_changed(int|array $meta_ids, int $object_id, string $key): void
     {
-        if ((str_starts_with($key, '_teksttv_') && !str_starts_with($key, '_teksttv_ai_')) || in_array($key, ['_thumbnail_id', '_yoast_wpseo_primary_category', '_wp_attachment_metadata', '_wp_attached_file'], true)) {
+        if (self::tracked_key($key)) {
             self::invalidate();
         }
     }
 
     /**
-     * Drafts and other post types cannot reach the feed, and publishing them fires a transition.
-     * Object ID 0 is delete_post_meta_by_key().
+     * Only attachments (feed images) and published posts matter; drafts reach the feed through
+     * a publish transition. Object ID 0 is delete_post_meta_by_key().
      *
      * @param int|array<int|string> $meta_ids
      */
     public static function post_meta_changed(int|array $meta_ids, int $object_id, string $key): void
     {
-        if ($object_id === 0 || get_post_type($object_id) === 'attachment' || self::in_feed($object_id)) {
-            self::meta_changed($meta_ids, $object_id, $key);
+        if (self::tracked_key($key) && ($object_id === 0 || get_post_type($object_id) === 'attachment' || self::in_feed($object_id))) {
+            self::invalidate();
         }
+    }
+
+    private static function tracked_key(string $key): bool
+    {
+        return (str_starts_with($key, '_teksttv_') && !str_starts_with($key, '_teksttv_ai_')) || in_array($key, ['_thumbnail_id', '_yoast_wpseo_primary_category', '_wp_attachment_metadata', '_wp_attached_file'], true);
     }
 
     /** Saved and unpublished posts; core's date only covers posts that remain published. */
@@ -106,8 +118,8 @@ final class RssFeed
     }
 
     /**
-     * Advance once, after the request's last write: a feed fetched between writes
-     * of one request (an editor save, an import) must not keep a final validator.
+     * Defer one advance to shutdown, after the request's last write: a feed fetched between writes
+     * of one request (an editor save, an import) must not receive the validator of the final state.
      */
     public static function invalidate(): void
     {
@@ -137,6 +149,20 @@ final class RssFeed
     private static function revision(string|false $modified): int
     {
         return max($modified ? (int) strtotime($modified . ' GMT') : 0, (int) get_option('teksttv_rss_modified', 0));
+    }
+
+    /**
+     * Validators alone allow heuristic freshness (RFC 9111), so make caches revalidate every poll.
+     *
+     * @param array<string, string> $headers
+     * @return array<string, string>
+     */
+    public static function feed_headers(array $headers): array
+    {
+        if (is_feed('rss2') && !is_comment_feed() && Helpers::has_feature('rss_feed')) {
+            $headers['Cache-Control'] ??= 'no-cache';
+        }
+        return $headers;
     }
 
     public static function render_namespace(): void

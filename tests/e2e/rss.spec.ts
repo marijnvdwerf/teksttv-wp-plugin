@@ -68,7 +68,7 @@ test.describe('RSS 2.0 export', () => {
             headers: { 'If-None-Match': etag, 'If-Modified-Since': 'Wed, 01 Jan 2098 00:00:00 GMT' },
         });
         expect(enabled.status()).toBe(200);
-        expect(enabled.headers()['cache-control'] ?? '').not.toContain('no-store');
+        expect(enabled.headers()['cache-control']).toBe('no-cache');
         expect(enabled.headers().etag).toBeTruthy();
         expect(enabled.headers()['last-modified']).toBeTruthy();
         expect(await enabled.text()).toContain(`xmlns:teksttv="${XML_NAMESPACE}"`);
@@ -271,7 +271,7 @@ test.describe('RSS 2.0 export', () => {
             update_option('teksttv_max_post_age', 0);
             update_option('teksttv_test_clock', '2098-10-25 23:59:59');
             wp_mkdir_p(WPMU_PLUGIN_DIR);
-            file_put_contents(WPMU_PLUGIN_DIR . '/rss-clock.php', '<?php namespace TekstTV; function current_datetime() { return new \\DateTimeImmutable(\\get_option("teksttv_test_clock"), new \\DateTimeZone("Europe/Amsterdam")); }');
+            file_put_contents(WPMU_PLUGIN_DIR . '/rss-clock.php', '<?php namespace TekstTV; function current_datetime() { return new \\DateTimeImmutable(\\get_option("teksttv_test_clock"), new \\DateTimeZone("Europe/Amsterdam")); } $_SERVER["REQUEST_TIME"] = current_datetime()->getTimestamp();');
         `);
         const before = await request.get('/?feed=rss2');
         const beforeItems = await readFeed(page, await before.text());

@@ -45,7 +45,6 @@ test('playout and RSS apply the shared article rules with explicit password poli
                 $results[$name] = ['slides' => $slides, 'rss' => ob_get_clean()];
                 remove_filter('teksttv_image_url', '__return_empty_string');
             }
-            wp_update_post(['ID' => $post->ID, 'post_password' => '']);
             echo wp_json_encode($results);
         `),
     );

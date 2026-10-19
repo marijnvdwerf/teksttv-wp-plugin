@@ -12,7 +12,6 @@ update_option('teksttv_features', [...Helpers::DEFAULT_FEATURES, 'rss_feed']);
 $results = [];
 $created_posts = [];
 $created_terms = ['category' => [], 'post_tag' => []];
-$original_age = get_option('teksttv_max_post_age', 30);
 update_option('teksttv_max_post_age', 0);
 try {
     foreach ([5, 20] as $count) {
@@ -85,12 +84,12 @@ try {
                     $output = ob_get_clean();
                 } else {
                     BuildContext::reset();
-                    $output = wp_json_encode(ArticlesLoopBlock::build(['count' => 50, 'taxonomy_filters' => ['category' => [$group]]]));
+                    $slides = ArticlesLoopBlock::build(['count' => 50, 'taxonomy_filters' => ['category' => [$group]]]);
+                    $output = wp_json_encode($slides);
                 }
                 if ($pass === 'warm-up') {
                     continue;
                 }
-                $slides = $caller === 'playout' ? json_decode($output, true) : [];
                 $results[] = [
                     'posts' => $count, 'caller' => $caller, 'cold' => $cold, 'primed' => $pass !== 'unprimed',
                     'queries' => $wpdb->num_queries - $start, 'hash' => hash('sha256', $output),
@@ -103,7 +102,6 @@ try {
     }
     echo wp_json_encode($results);
 } finally {
-    update_option('teksttv_max_post_age', $original_age);
     foreach ($created_posts as $id) {
         wp_delete_post($id, true);
     }

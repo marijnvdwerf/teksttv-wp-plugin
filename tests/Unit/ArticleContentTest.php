@@ -32,7 +32,6 @@ class ArticleContentTest extends TestCase
         Functions\when('get_post_meta')->alias(fn($id, $key) => $this->meta[$key] ?? '');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('wp_timezone')->justReturn(new \DateTimeZone('Europe/Amsterdam'));
-        Functions\when('get_post_stati')->justReturn(['publish' => 'publish', 'inherit' => 'inherit', 'trash' => 'trash', 'auto-draft' => 'auto-draft']);
         Functions\when('get_post_datetime')->alias(fn($post) => \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $post->post_date, new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('get_the_title')->justReturn('Gewone titel');
         Functions\when('get_the_terms')->justReturn(false);
@@ -46,12 +45,13 @@ class ArticleContentTest extends TestCase
     {
         // Clear the missing-attachment list.
         ArticleContent::prime_images([]);
+        unset($GLOBALS['wpdb']);
         parent::tearDown();
     }
 
     public function test_prepares_title_pages_and_image_data_in_saved_order(): void
     {
-        $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), [11], '00', 0.5, 11, 12]];
+        $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), [11], '00', 0.5, '-5', 11, 12, '13abc']];
         $this->meta['_teksttv_content'] = "Eerste\n---\nTweede";
         $article = ArticleContent::prepare($this->post);
         $this->assertSame('Eigen kop', $article['title']);
@@ -75,6 +75,7 @@ class ArticleContentTest extends TestCase
         yield 'invalid end' => ['_teksttv_date_end', 'invalid'];
         yield 'impossible date' => ['_teksttv_date_start', '2026-02-31'];
         yield 'NUL date' => ['_teksttv_date_end', "2026-10-19\0"];
+        yield 'embedded NUL date' => ['_teksttv_date_start', "2026-10\0-19"];
         yield 'corrupt date' => ['_teksttv_date_start', new \stdClass()];
         yield 'object end date' => ['_teksttv_date_end', new \stdClass()];
         yield 'wrong weekday' => ['_teksttv_days', ['2', '3']];
@@ -170,8 +171,7 @@ class ArticleContentTest extends TestCase
         Functions\expect('_prime_post_caches')->once()->with([14, 13, 12, 999, 10, 11], false, true);
         Functions\expect('_get_non_cached_ids')->once()->with([14, 13, 12, 999, 10, 11], 'posts')->andReturn([999]);
         Functions\when('has_filter')->justReturn(false);
-        // Trashed attachments still resolve in core, so they are not missing.
-        Functions\expect('get_posts')->once()->with(\Mockery::on(fn($args) => in_array('trash', $args['post_status'], true)))->andReturn([]);
+        $this->wpdb(['999' => false]);
         Functions\when('wp_get_attachment_image_url')->alias(fn($id) => $id === 999 ? $this->fail('Missing attachment was looked up again.') : 'https://example.com/' . $id . '.jpg');
         ArticleContent::prime_images([$this->post]);
         $article = ArticleContent::prepare($this->post);
@@ -179,28 +179,44 @@ class ArticleContentTest extends TestCase
         $this->assertSame(['https://example.com/12.jpg', 'https://example.com/12.jpg'], array_column($article['images'], 'url'));
     }
 
-    /** @return array<string, array{bool, bool, list<int>}> */
+    /**
+     * Rows that exist, keyed by ID; asserts the raw lookup covers every type and status.
+     *
+     * @param array<string, bool> $rows
+     */
+    private function wpdb(array $rows, int $times = 1): void
+    {
+        $wpdb = \Mockery::mock('wpdb');
+        $wpdb->posts = 'wp_posts';
+        $wpdb->shouldReceive('get_col')->times($times)->with('SELECT ID FROM wp_posts WHERE ID IN (' . implode(',', array_keys($rows)) . ')')
+            ->andReturn(array_map('strval', array_keys(array_filter($rows))));
+        $GLOBALS['wpdb'] = $wpdb;
+    }
+
+    /** @return array<string, array{0: bool, 1: bool, 2: list<int>, 3?: string}> */
     public static function uncachedAttachments(): array
     {
         return [
             'existing attachment the cache did not keep' => [false, false, [999]],
             'image filter that resolves IDs without a post' => [true, true, []],
             'image filter added after priming' => [false, true, []],
+            'image src filter added after priming' => [false, true, [], 'wp_get_attachment_image_src'],
         ];
     }
 
     /** Priming must not hide images that rendering without priming would show. */
     #[DataProvider('uncachedAttachments')]
-    public function test_uncached_attachments_are_only_skipped_when_absent(bool $filter_when_priming, bool $filter_when_rendering, array $existing): void
+    public function test_uncached_attachments_are_only_skipped_when_absent(bool $filter_when_priming, bool $filter_when_rendering, array $existing, string $filter_hook = 'image_downsize'): void
     {
         $this->meta['_teksttv_images'] = [999];
         Functions\when('wp_get_attachment_image_url')->alias(fn($id) => 'https://example.com/' . $id . '.jpg');
         Functions\when('_prime_post_caches')->justReturn(null);
         Functions\when('_get_non_cached_ids')->justReturn([999]);
-        Functions\when('get_posts')->justReturn($existing);
+        // A filter present while priming makes the lookup pointless.
+        $this->wpdb(['999' => $existing !== []], $filter_when_priming ? 0 : 1);
         $filter = $filter_when_priming;
-        Functions\when('has_filter')->alias(function ($hook) use (&$filter) {
-            return $filter && $hook === 'image_downsize';
+        Functions\when('has_filter')->alias(function ($hook) use (&$filter, $filter_hook) {
+            return $filter && $hook === $filter_hook;
         });
         ArticleContent::prime_images([$this->post]);
         $filter = $filter_when_rendering;
@@ -224,5 +240,141 @@ class ArticleContentTest extends TestCase
         ArticleContent::prime_images([$this->post]);
         $article = ArticleContent::prepare($this->post);
         $this->assertSame(['https://example.com/12.jpg', 'https://example.com/11.jpg'], array_column($article['images'], 'url'));
+    }
+
+    /** @return iterable<string, array{string, list<string>, 2?: bool}> */
+    public static function pageSplits(): iterable
+    {
+        yield 'single page' => ['<p>Hello world</p>', ['<p>Hello world</p>']];
+        yield 'HTML separator' => ['<p>Page one</p><p>---</p><p>Page two</p>', ['<p>Page one</p>', '<p>Page two</p>']];
+        yield 'longer separator' => ['<p>One</p><p>-----</p><p>Two</p>', ['<p>One</p>', '<p>Two</p>']];
+        yield 'edge separators' => ['<p>---</p><p>Only page</p><p>---</p>', ['<p>Only page</p>']];
+        yield 'plain-text separator' => ["Page one\n---\nPage two", ['Page one', 'Page two']];
+        yield 'inline hyphens' => ['foo---bar', ['foo---bar']];
+        yield 'empty' => ['', []];
+        yield 'whitespace only' => ['   ', []];
+        yield 'zero is content' => ['0', ['0']];
+        yield 'feature disabled' => ['<p>Page one</p><p>---</p><p>Page two</p>', ['<p>Page one</p><p>---</p><p>Page two</p>'], false];
+    }
+
+    /** @param list<string> $expected */
+    #[DataProvider('pageSplits')]
+    public function test_split_pages(string $content, array $expected, bool $separator = true): void
+    {
+        $this->features = $separator ? ['page_separator'] : [];
+        $this->assertSame($expected, ArticleContent::split_pages($content));
+    }
+
+    public function test_sidebar_image_override_with_explicit_none(): void
+    {
+        $this->meta['_teksttv_sidebar_image'] = '0';
+        // Without the suppression, the featured image would be the fallback.
+        Functions\when('get_post_thumbnail_id')->justReturn(77);
+
+        $result = ArticleContent::get_sidebar_image_data(1);
+        $this->assertNull($result);
+    }
+
+    public function test_sidebar_image_override_with_integer_zero(): void
+    {
+        $this->meta['_teksttv_sidebar_image'] = 0;
+        // Without the suppression, the featured image would be the fallback.
+        Functions\when('get_post_thumbnail_id')->justReturn(77);
+
+        $result = ArticleContent::get_sidebar_image_data(1);
+        $this->assertNull($result);
+    }
+
+    public function test_sidebar_image_custom_override(): void
+    {
+        $this->meta['_teksttv_sidebar_image'] = '42';
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id, $size) => $id === 42 && $size === 'large' ? 'https://example.com/custom.jpg' : false);
+
+        $result = ArticleContent::get_sidebar_image_data(1);
+        $this->assertSame('https://example.com/custom.jpg', $result['url']);
+    }
+
+    public function test_sidebar_image_falls_back_to_category_image(): void
+    {
+        $this->meta['_teksttv_sidebar_image'] = '';
+
+        Functions\when('get_the_terms')->alias(fn($id, $taxonomy) => $id === 1 && $taxonomy === 'category' ? [(object) ['term_id' => 10], (object) ['term_id' => 20]] : false);
+        Functions\expect('get_term_meta')
+            ->with(10, '_teksttv_category_image', true)
+            ->andReturn('55');
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id, $size) => $id === 55 && $size === 'large' ? 'https://example.com/cat.jpg' : false);
+
+        $result = ArticleContent::get_sidebar_image_data(1);
+        $this->assertSame('https://example.com/cat.jpg', $result['url']);
+    }
+
+    public function test_sidebar_image_falls_back_to_post_thumbnail(): void
+    {
+        $this->meta['_teksttv_sidebar_image'] = '';
+
+        Functions\when('get_the_terms')->alias(fn($id, $taxonomy) => $id === 1 && $taxonomy === 'category' ? [(object) ['term_id' => 10]] : false);
+        Functions\expect('get_term_meta')
+            ->with(10, '_teksttv_category_image', true)
+            ->andReturn('');
+
+        Functions\when('get_post_thumbnail_id')->alias(fn($id) => $id === 1 ? 77 : 0);
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id, $size) => $id === 77 && $size === 'large' ? 'https://example.com/thumb.jpg' : false);
+
+        $result = ArticleContent::get_sidebar_image_data(1);
+        $this->assertSame('https://example.com/thumb.jpg', $result['url']);
+    }
+
+    /** @return iterable<string, array{mixed, mixed, mixed}> */
+    public static function corruptSidebarIds(): iterable
+    {
+        yield 'object override' => [new \stdClass(), '', ''];
+        yield 'array primary category' => ['', ['10'], ''];
+        yield 'array category image' => ['', '', ['88']];
+    }
+
+    #[DataProvider('corruptSidebarIds')]
+    public function test_sidebar_image_treats_corrupt_ids_as_unavailable(mixed $override, mixed $primary, mixed $category_image): void
+    {
+        $this->meta['_teksttv_sidebar_image'] = $override;
+        Functions\when('get_the_terms')->justReturn([(object) ['term_id' => 10]]);
+        // If cast to int, a corrupt ID would become 1, which resolves to an image here.
+        Functions\when('get_term_meta')->alias(fn($term_id) => $term_id === 1 ? '5' : $category_image);
+        Functions\when('get_post_thumbnail_id')->justReturn(77);
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id) => 'https://example.com/' . $id . '.jpg');
+        Functions\when('wp_get_attachment_caption')->justReturn('');
+        Functions\when('apply_filters')->alias(fn($tag, $value) => $tag === 'teksttv_primary_category' ? $primary : $value);
+
+        $this->assertSame('https://example.com/77.jpg', ArticleContent::get_sidebar_image_data(1)['url']);
+    }
+
+    public function test_sidebar_image_ignores_corrupt_thumbnail_meta(): void
+    {
+        $this->meta['_thumbnail_id'] = new \stdClass();
+        Functions\when('get_post_thumbnail_id')->alias(fn() => $this->fail('Corrupt thumbnail meta was resolved.'));
+
+        $this->assertNull(ArticleContent::get_sidebar_image_data(1));
+    }
+
+    public function test_sidebar_image_returns_null_when_nothing_found(): void
+    {
+        $this->meta['_teksttv_sidebar_image'] = '';
+        Functions\when('get_post_thumbnail_id')->justReturn(0);
+
+        $result = ArticleContent::get_sidebar_image_data(1);
+        $this->assertNull($result);
+    }
+
+    public function test_sidebar_image_primary_category_takes_precedence(): void
+    {
+        $this->meta['_teksttv_sidebar_image'] = '';
+
+        Functions\expect('get_term_meta')
+            ->with(10, '_teksttv_category_image', true)
+            ->andReturn('88');
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id, $size) => $id === 88 && $size === 'large' ? 'https://example.com/primary.jpg' : false);
+        Functions\when('apply_filters')->alias(fn($tag, $value) => $tag === 'teksttv_primary_category' ? 10 : $value);
+
+        $result = ArticleContent::get_sidebar_image_data(1);
+        $this->assertSame('https://example.com/primary.jpg', $result['url']);
     }
 }

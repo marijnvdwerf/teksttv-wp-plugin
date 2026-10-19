@@ -36,24 +36,21 @@ final class ArticleContent
             // Join core's lazy queue so one query loads these and other queued terms.
             wp_lazyload_term_meta($term_ids);
             foreach ($term_ids as $term_id) {
-                $image_ids[] = get_term_meta($term_id, '_teksttv_category_image', true);
+                $image_ids[] = get_term_meta($term_id, CategoryMeta::META_KEY, true);
             }
         }
-        $image_ids = array_values(array_unique(array_map('intval', array_filter($image_ids, fn($id) => is_numeric($id) && (int) $id > 0))));
+        $image_ids = array_values(array_unique(array_filter(array_map(self::attachment_id(...), $image_ids))));
         if ($image_ids !== []) {
             _prime_post_caches($image_ids, false, true);
             // A cache miss is not proof of absence (suspended cache additions), and image
             // filters can resolve IDs without a post, so only skip IDs the database lacks.
             $uncached = _get_non_cached_ids($image_ids, 'posts');
             if ($uncached !== [] && !self::image_filters_active()) {
-                $existing = get_posts([
-                    'post_type' => 'attachment',
-                    'post_status' => array_keys(get_post_stati()),
-                    'post__in' => $uncached,
-                    'posts_per_page' => -1,
-                    'fields' => 'ids',
-                ]);
-                self::$missing_images = array_fill_keys(array_diff($uncached, $existing), true);
+                // get_post()'s own lookup: no type, status or query filters, so nothing that resolves is skipped.
+                global $wpdb;
+                // phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching, WordPress.DB.PreparedSQL.NotPrepared -- integer IDs; absent rows have nothing to cache.
+                $existing = $wpdb->get_col('SELECT ID FROM ' . $wpdb->posts . ' WHERE ID IN (' . implode(',', array_map('intval', $uncached)) . ')');
+                self::$missing_images = array_fill_keys(array_diff($uncached, array_map('intval', $existing)), true);
             }
         }
     }
@@ -79,9 +76,10 @@ final class ArticleContent
             $start = self::string_meta($post->ID, '_teksttv_date_start');
             $end = self::string_meta($post->ID, '_teksttv_date_end');
             $days = get_post_meta($post->ID, '_teksttv_days', true);
-            // Authoritative and stricter than the playout's SQL pre-filter: is_within_date_range() ignores
-            // unparseable dates and rolls over impossible ones, is_allowed_on_day() cannot stringify non-scalar
-            // days. '' days is missing meta (all days); any other non-array is malformed.
+            // Authoritative; the playout's SQL date filter is only a pre-filter. Validate first:
+            // is_within_date_range() ignores unparseable dates and rolls over impossible ones, and
+            // is_allowed_on_day() cannot stringify non-scalar days. '' days is missing meta (all days);
+            // any other non-array is malformed.
             if (
                 !self::valid_date($start) || !self::valid_date($end)
                 || (is_array($days) ? array_filter($days, 'is_scalar') !== $days : $days !== '')
@@ -120,7 +118,7 @@ final class ArticleContent
         ];
     }
 
-    /** @return list<mixed> Saved order; string keys from corrupt meta are dropped. */
+    /** @return list<mixed> Saved order, re-indexed (corrupt meta can have string keys). */
     private static function extra_image_ids(int $post_id): array
     {
         $ids = Helpers::has_feature('extra_images') ? get_post_meta($post_id, '_teksttv_images', true) : [];
@@ -152,6 +150,7 @@ final class ArticleContent
 
     /**
      * Override ('0' suppresses), primary category, categories, featured image.
+     * An empty filtered URL stops the fallback; callers must check `url`.
      *
      * @return array<string, string>|null
      */
@@ -170,7 +169,7 @@ final class ArticleContent
         }
 
         foreach (self::category_ids($post_id) as $term_id) {
-            $data = self::image_data(get_term_meta($term_id, '_teksttv_category_image', true), 'text_sidebar');
+            $data = self::image_data(get_term_meta($term_id, CategoryMeta::META_KEY, true), 'text_sidebar');
             if ($data) {
                 return $data;
             }
@@ -205,14 +204,19 @@ final class ArticleContent
      *
      * @return array<string, string>|null
      */
-    private static function image_data(mixed $id, string $slot): ?array
+    private static function image_data(mixed $raw, string $slot): ?array
     {
-        $id = is_numeric($id) ? (int) $id : 0;
-        if ($id <= 0) {
+        $id = self::attachment_id($raw);
+        if ($id === 0) {
             return null;
         }
         // Filters added after priming (e.g. during rss2_head) may still resolve a missing ID.
         return isset(self::$missing_images[$id]) && !self::image_filters_active() ? null : Helpers::get_image_data($id, 'large', $slot);
+    }
+
+    private static function attachment_id(mixed $raw): int
+    {
+        return is_numeric($raw) ? max(0, (int) $raw) : 0;
     }
 
     private static function image_filters_active(): bool

@@ -52,7 +52,8 @@ final class RecentPostsQuery
 
     /**
      * When a post leaves the age window: its local publish time plus the maximum age in
-     * calendar days, like the date_query above. Null without a limit.
+     * calendar days, like the date_query above. Null without a limit; 0 (already expired)
+     * when the post date is unusable.
      */
     public static function expires_at(\WP_Post $post): ?int
     {

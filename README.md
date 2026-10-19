@@ -115,18 +115,12 @@ URI and local name, rather than relying on the `teksttv` prefix.
   a custom override (or explicit suppression), category image, then featured
   image.
 - `extraImage` is repeated in saved order, omitting unavailable attachments.
-  An empty URL from `teksttv_image_url` omits that image from `extraImage` and
-  `image` (the sidebar does not fall back).
   Image-only posts receive only `title` and `extraImage`; posts with neither
   text nor usable extra images receive no TekstTV fields.
 
 The playout uses the same per-post rules, but selects posts per articles block
 (taxonomy filters, count), skips posts already shown in the loop, and also shows
 password-protected posts.
-
-Attachment posts, their metadata and category images are primed once per feed
-or playout query batch, so image queries do not grow with the number of
-articles. `tests/e2e/attachment-cache.spec.ts` enforces this.
 
 Poll the feed regularly and replace the imported TekstTV data for each returned
 item: if its TekstTV fields disappear, remove that item's imported TekstTV
@@ -135,15 +129,15 @@ the feed window need a retention policy on the receiving narrowcaster.
 
 RSS 2.0 feeds answer ETag and Last-Modified conditional requests with 304 while
 unchanged. Validators advance, from the next second, when published posts are
-saved, unpublished or deleted; when the TekstTV features, maximum age or
-timezone change; on category, tag, TekstTV field, featured image or Yoast
-primary category changes of published posts; and on category image or
-attachment file changes. Only writes through WordPress APIs count, not direct
-SQL. While export is enabled they also advance at midnight in the site timezone
-and when a feed post reaches the maximum age. Other content follows WordPress's
-own validator, which misses changes such as the site title, term names, author
-names or comment counts. CDNs may cache feeds but should revalidate on each
-poll.
+saved, unpublished or deleted; when the TekstTV features, maximum age, timezone
+or number of feed items change; on category, tag, TekstTV field, featured image
+or Yoast primary category changes of published posts; and on category name,
+category image or attachment file changes. Only writes through WordPress APIs
+count, not direct SQL. While export is enabled they also advance at midnight in
+the site timezone and when a feed post reaches the maximum age. Other content
+follows WordPress's own validator, which misses changes such as the site title,
+tag names, author names or comment counts. CDNs may cache feeds but should
+revalidate on each poll.
 
 ## REST API
 

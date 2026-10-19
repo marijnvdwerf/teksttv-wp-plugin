@@ -4,7 +4,7 @@ namespace TekstTV;
 
 class CategoryMeta
 {
-    private const META_KEY = '_teksttv_category_image';
+    public const META_KEY = '_teksttv_category_image';
 
     public static function init(): void
     {
