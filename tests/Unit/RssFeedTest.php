@@ -273,29 +273,63 @@ class RssFeedTest extends TestCase
         RssFeed::render_namespace();
     }
 
-    public function test_enabled_feed_has_no_stale_cache_validators(): void
+    public function test_enabled_feed_validator_includes_local_midnight(): void
     {
         Functions\when('is_feed')->justReturn(true);
-        Functions\when('wp_get_nocache_headers')->justReturn(['Cache-Control' => 'no-cache, no-store, must-revalidate', 'Last-Modified' => false, 'ETag' => '"filtered"']);
-        $headers = RssFeed::filter_headers(['ETag' => '"old"', 'Last-Modified' => 'old', 'Content-Type' => 'application/rss+xml']);
-        $this->assertArrayNotHasKey('ETag', $headers);
-        $this->assertFalse($headers['Last-Modified']);
-        $this->assertStringContainsString('no-store', $headers['Cache-Control']);
-        $this->assertSame('application/rss+xml', $headers['Content-Type']);
+        $this->assertSame('2026-10-18 22:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
+        $this->assertSame('2026-10-19 09:00:00', RssFeed::last_modified('2026-10-19 09:00:00', 'GMT'));
     }
 
-    public function test_disabled_feature_keeps_original_cache_headers(): void
+    public function test_disabled_feature_keeps_revision_to_invalidate_export_removal(): void
     {
         $this->features = Helpers::DEFAULT_FEATURES;
         Functions\when('is_feed')->justReturn(true);
-        $headers = ['ETag' => '"original"', 'Last-Modified' => 'original'];
-        $this->assertSame($headers, RssFeed::filter_headers($headers));
+        Functions\when('get_option')->alias(fn($key, $default = false) => $key === 'teksttv_rss_modified' ? strtotime('2026-10-19 10:00:00 GMT') : $default);
+        $this->assertSame('2026-10-19 10:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
     }
 
-    public function test_other_feed_types_keep_original_cache_headers(): void
+    public function test_age_expiry_advances_the_validator_within_the_same_day(): void
+    {
+        Functions\when('is_feed')->justReturn(true);
+        $query = \Mockery::mock('WP_Query');
+        $this->post->post_date = '2026-09-19 11:59:59';
+        $query->posts = [$this->post];
+        $GLOBALS['wp_query'] = $query;
+        try {
+            Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 11:59:58', new \DateTimeZone('Europe/Amsterdam')));
+            $this->assertSame('2026-10-18 22:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
+            Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 11:59:59', new \DateTimeZone('Europe/Amsterdam')));
+            $this->assertSame('2026-10-19 09:59:59', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
+        } finally {
+            unset($GLOBALS['wp_query']);
+        }
+    }
+
+    public function test_other_feeds_and_timezone_formats_keep_core_validator(): void
     {
         Functions\when('is_feed')->justReturn(false);
-        $headers = ['ETag' => '"original"'];
-        $this->assertSame($headers, RssFeed::filter_headers($headers));
+        $this->assertSame('original', RssFeed::last_modified('original', 'GMT'));
+        Functions\when('is_feed')->justReturn(true);
+        Functions\when('is_comment_feed')->justReturn(true);
+        $this->assertSame('original', RssFeed::last_modified('original', 'GMT'));
+        $this->assertSame('original', RssFeed::last_modified('original', 'blog'));
+    }
+
+    public function test_invalidation_advances_past_core_and_runs_once_per_request(): void
+    {
+        (new \ReflectionProperty(RssFeed::class, 'invalidated'))->setValue(null, false);
+        $future = time() + 60;
+        Functions\when('get_lastpostmodified')->justReturn(gmdate('Y-m-d H:i:s', $future));
+        Functions\expect('update_option')->once()->with('teksttv_rss_modified', $future + 1, false)->andReturn(true);
+        RssFeed::invalidate();
+        RssFeed::invalidate();
+    }
+
+    public function test_unrelated_option_and_meta_changes_do_not_invalidate(): void
+    {
+        (new \ReflectionProperty(RssFeed::class, 'invalidated'))->setValue(null, false);
+        Functions\expect('update_option')->never();
+        RssFeed::option_changed('unrelated');
+        RssFeed::meta_changed(1, 42, 'unrelated');
     }
 }

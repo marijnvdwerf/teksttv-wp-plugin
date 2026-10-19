@@ -2,52 +2,88 @@
 
 namespace TekstTV;
 
+use TekstTV\Blocks\Common\RecentPostsQuery;
+
 final class RssFeed
 {
     public const XML_NAMESPACE = 'https://github.com/oszuidwest/teksttv-wp-plugin/rss/1.0';
 
     private static bool $namespace_rendered = false;
 
+    private static bool $invalidated = false;
+
     public static function init(): void
     {
         add_action('rss2_ns', [self::class, 'render_namespace']);
         add_action('rss2_item', [self::class, 'render_item']);
-        // Run last so the decision sees the final feed query.
-        add_action('pre_get_posts', [self::class, 'prepare_request'], PHP_INT_MAX);
-        add_filter('wp_headers', [self::class, 'filter_headers']);
+        add_filter('get_lastpostmodified', [self::class, 'last_modified'], 10, 2);
+        foreach (['added_option', 'updated_option', 'deleted_option'] as $hook) {
+            add_action($hook, [self::class, 'option_changed']);
+        }
+        foreach (['added_post_meta', 'updated_post_meta', 'deleted_post_meta', 'added_term_meta', 'updated_term_meta', 'deleted_term_meta'] as $hook) {
+            add_action($hook, [self::class, 'meta_changed'], 10, 3);
+        }
+        add_action('save_post', [self::class, 'invalidate']);
     }
 
     /**
-     * Drop the conditional request headers so core cannot answer 304.
-     *
-     * Core compares them with the last post modification before wp_headers runs.
-     * That date misses date/weekday transitions and changes that do not save a
-     * post, such as settings and category images.
+     * Extend core's validators before it evaluates conditional requests.
      */
-    public static function prepare_request(\WP_Query $query): void
+    public static function last_modified(string|false $modified, string $timezone): string|false
     {
-        if (
-            $query->is_main_query() && $query->is_feed('rss2') && !$query->is_comment_feed
-            && Helpers::has_feature('rss_feed')
-        ) {
-            unset($_SERVER['HTTP_IF_NONE_MATCH'], $_SERVER['HTTP_IF_MODIFIED_SINCE']);
+        if (strtolower($timezone) !== 'gmt' || !is_feed('rss2') || is_comment_feed()) {
+            return $modified;
+        }
+
+        // Retain the revision while disabled: turning export off changes the XML too.
+        $timestamp = max($modified ? (strtotime($modified . ' GMT') ?: 0) : 0, (int) get_option('teksttv_rss_modified', 0));
+        if (Helpers::has_feature('rss_feed')) {
+            $now = current_datetime();
+            $timestamp = max($timestamp, $now->setTime(0, 0)->getTimestamp());
+            // Age eligibility can expire within the day, without a post save.
+            global $wp_query;
+            $max_age = RecentPostsQuery::max_age_days();
+            if ($max_age > 0 && $wp_query instanceof \WP_Query) {
+                foreach ($wp_query->posts as $post) {
+                    if (!$post instanceof \WP_Post) {
+                        continue;
+                    }
+                    $published = \DateTimeImmutable::createFromFormat('!Y-m-d H:i:s', $post->post_date, wp_timezone());
+                    $expiry = $published ? $published->modify('+' . $max_age . ' days')->getTimestamp() : 0;
+                    if ($expiry <= $now->getTimestamp()) {
+                        $timestamp = max($timestamp, $expiry);
+                    }
+                }
+            }
+        }
+        return $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : $modified;
+    }
+
+    public static function option_changed(string $option): void
+    {
+        if (in_array($option, ['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset'], true)) {
+            self::invalidate();
         }
     }
 
-    /**
-     * Send no-cache headers and drop the ETag, which wp_get_nocache_headers() keeps.
-     *
-     * @param array<string, string|false> $headers
-     * @return array<string, string|false>
-     */
-    public static function filter_headers(array $headers): array
+    /** @param int|list<int> $meta_ids */
+    public static function meta_changed(int|array $meta_ids, int $object_id, string $key): void
     {
-        if (is_feed('rss2') && !is_comment_feed() && Helpers::has_feature('rss_feed')) {
-            $headers = array_merge($headers, wp_get_nocache_headers());
-            unset($headers['ETag']);
+        if (str_starts_with($key, '_teksttv_') || in_array($key, ['_thumbnail_id', '_yoast_wpseo_primary_category', '_wp_attachment_metadata', '_wp_attached_file'], true)) {
+            self::invalidate();
         }
+    }
 
-        return $headers;
+    public static function invalidate(): void
+    {
+        if (self::$invalidated) {
+            return;
+        }
+        self::$invalidated = true;
+        // HTTP dates have second precision. Advance even for writes in the same second.
+        $modified = get_lastpostmodified('gmt');
+        $previous = max((int) get_option('teksttv_rss_modified', 0), $modified ? (strtotime($modified . ' GMT') ?: 0) : 0);
+        update_option('teksttv_rss_modified', max(time(), $previous + 1), false);
     }
 
     public static function render_namespace(): void
