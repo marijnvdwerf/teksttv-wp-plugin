@@ -179,9 +179,10 @@ add_filter(
 );
 ```
 
-RSS 2.0 feeds answer conditional requests. When a filter's inputs change
-without a post save or a TekstTV meta write, such as `_station_primary_category`
-above, call `\TekstTV\RssFeed::invalidate()` so feed readers fetch the new XML.
+RSS 2.0 feeds answer conditional requests. Only saves of published posts and
+their TekstTV meta writes update the validators automatically. When a filter's
+inputs change otherwise, such as `_station_primary_category` above, call
+`\TekstTV\RssFeed::invalidate()` so feed readers fetch the new XML.
 
 Return a category term ID or `false` to continue with the post's assigned categories and featured image.
 
