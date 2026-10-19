@@ -19,6 +19,8 @@ class RssFeedTest extends TestCase
 
     private int $max_age = 30;
 
+    private int $revision = 0;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -36,6 +38,7 @@ class RssFeedTest extends TestCase
         Functions\when('get_option')->alias(fn($key, $default = false) => match ($key) {
             'teksttv_features' => $this->features,
             'teksttv_max_post_age' => $this->max_age,
+            'teksttv_rss_modified' => $this->revision,
             default => $default,
         });
         Functions\when('get_post')->alias(fn() => $this->post);
@@ -251,7 +254,7 @@ class RssFeedTest extends TestCase
     {
         $this->features = Helpers::DEFAULT_FEATURES;
         Functions\when('is_feed')->justReturn(true);
-        Functions\when('get_option')->alias(fn($key, $default = false) => $key === 'teksttv_rss_modified' ? strtotime('2026-10-18 10:00:00 GMT') : $default);
+        $this->revision = strtotime('2026-10-18 10:00:00 GMT');
         $this->assertSame('2026-10-18 10:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
     }
 
@@ -317,7 +320,6 @@ class RssFeedTest extends TestCase
     #[DataProvider('servedSeconds')]
     public function test_write_in_the_served_second_advances_the_validator(string $now_gmt, string $core_gmt): void
     {
-        $stored = 0;
         $now = strtotime($now_gmt . ' GMT');
         $at = function (int $time) {
             Functions\when('TekstTV\\time')->justReturn($time);
@@ -325,16 +327,8 @@ class RssFeedTest extends TestCase
         };
         $at($now);
         Functions\when('is_feed')->justReturn(true);
-        Functions\when('get_option')->alias(function ($key, $default = false) use (&$stored) {
-            return match ($key) {
-                'teksttv_features' => $this->features,
-                'teksttv_max_post_age' => $this->max_age,
-                'teksttv_rss_modified' => $stored,
-                default => $default,
-            };
-        });
-        Functions\when('update_option')->alias(function ($key, $value) use (&$stored) {
-            $stored = $value;
+        Functions\when('update_option')->alias(function ($key, $value) {
+            $this->revision = $value;
             return true;
         });
         Functions\when('get_lastpostmodified')->justReturn($core_gmt);
@@ -351,12 +345,7 @@ class RssFeedTest extends TestCase
     public function test_future_revisions_are_served_as_the_current_time(): void
     {
         Functions\when('is_feed')->justReturn(true);
-        Functions\when('get_option')->alias(fn($key, $default = false) => match ($key) {
-            'teksttv_features' => $this->features,
-            'teksttv_max_post_age' => $this->max_age,
-            'teksttv_rss_modified' => strtotime('2026-10-19 10:30:00 GMT'),
-            default => $default,
-        });
+        $this->revision = strtotime('2026-10-19 10:30:00 GMT');
         $this->assertSame('2026-10-19 10:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
     }
 
@@ -432,15 +421,10 @@ class RssFeedTest extends TestCase
         $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
     }
 
-    public function test_force_deletes_are_hooked(): void
+    public function test_force_deletes_and_feed_options_are_hooked_but_unrelated_options_are_not(): void
     {
         RssFeed::init();
         $this->assertNotFalse(has_action('before_delete_post'));
-    }
-
-    public function test_feed_options_are_hooked_but_unrelated_ones_are_not(): void
-    {
-        RssFeed::init();
         foreach (['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset'] as $option) {
             foreach (['add_option_', 'update_option_', 'delete_option_'] as $prefix) {
                 $this->assertNotFalse(has_action($prefix . $option, [RssFeed::class, 'invalidate']), $prefix . $option);

@@ -55,10 +55,7 @@ final class RssFeed
             $max_age = RecentPostsQuery::max_age_days();
             if ($max_age > 0 && $wp_query instanceof \WP_Query) {
                 foreach ($wp_query->posts as $post) {
-                    if (!$post instanceof \WP_Post) {
-                        continue;
-                    }
-                    $published = get_post_datetime($post);
+                    $published = $post instanceof \WP_Post ? get_post_datetime($post) : false;
                     $expiry = $published ? $published->modify('+' . $max_age . ' days')->getTimestamp() : 0;
                     if ($expiry <= $now->getTimestamp()) {
                         $timestamp = max($timestamp, $expiry);
