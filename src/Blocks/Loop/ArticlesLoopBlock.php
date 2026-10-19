@@ -102,6 +102,7 @@ final class ArticlesLoopBlock
             ['key' => '_teksttv_active', 'value' => '1', 'compare' => '='],
         ];
         if ($scheduling) {
+            // SQL pre-filter only; ArticleContent::prepare() is authoritative.
             $meta_query[] = Helpers::get_date_range_meta_query();
         }
 

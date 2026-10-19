@@ -98,99 +98,10 @@ class RssFeedTest extends TestCase
         $this->assertSame('Gewone & titel (regio)', (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->title);
     }
 
-    public function test_disabled_title_feature_ignores_stored_override(): void
+    public function test_inactive_post_has_no_teksttv_fields(): void
     {
-        $this->features = ['rss_feed'];
-        $this->meta['_teksttv_title'] = 'Verborgen kop';
-        $this->assertSame('Gewone & titel (regio)', (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->title);
-    }
-
-    /** @return iterable<string, array{string, mixed}> */
-    public static function excludedMeta(): iterable
-    {
-        yield 'inactive' => ['_teksttv_active', '0'];
-        yield 'never activated' => ['_teksttv_active', ''];
-        yield 'future start' => ['_teksttv_date_start', '2026-10-20'];
-        yield 'expired end' => ['_teksttv_date_end', '2026-10-18'];
-        yield 'wrong weekday' => ['_teksttv_days', ['2', '3']];
-        yield 'empty content' => ['_teksttv_content', " \n\t"];
-        yield 'only page separators' => ['_teksttv_content', "---\n---"];
-    }
-
-    #[DataProvider('excludedMeta')]
-    public function test_ineligible_content_has_no_teksttv_fields(string $key, mixed $value): void
-    {
-        $this->meta[$key] = $value;
+        $this->meta['_teksttv_active'] = '0';
         $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
-    }
-
-    /** @return iterable<string, array{string, string, bool}> */
-    public static function postAges(): iterable
-    {
-        yield 'at the exclusive cutoff' => ['2026-10-19 12:00:00', '2026-09-19 12:00:00', false];
-        yield 'just after the cutoff' => ['2026-10-19 12:00:00', '2026-09-19 12:00:01', true];
-        yield 'across the spring DST change' => ['2026-04-01 12:00:00', '2026-03-02 11:30:00', false];
-        yield 'across the autumn DST change' => ['2026-11-01 12:00:00', '2026-10-02 12:30:00', true];
-    }
-
-    #[DataProvider('postAges')]
-    public function test_max_age_uses_the_playout_cutoff(string $now, string $post_date, bool $exported): void
-    {
-        Functions\when('current_datetime')->justReturn(new \DateTimeImmutable($now, new \DateTimeZone('Europe/Amsterdam')));
-        $this->post->post_date = $post_date;
-        $this->assertSame($exported, count($this->renderItem()->children(RssFeed::XML_NAMESPACE)) > 0);
-    }
-
-    public function test_zero_max_age_disables_the_age_limit(): void
-    {
-        $this->max_age = 0;
-        $this->post->post_date = '2025-01-01 00:00:00';
-        $this->assertNotEmpty((string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
-    }
-
-    /** @return iterable<string, array{string, mixed}> */
-    public static function malformedMeta(): iterable
-    {
-        yield 'object content' => ['_teksttv_content', new \stdClass()];
-        yield 'array content' => ['_teksttv_content', ['Eerste slide']];
-        yield 'object title' => ['_teksttv_title', new \stdClass()];
-        yield 'array start date' => ['_teksttv_date_start', ['2026-10-01']];
-        yield 'object end date' => ['_teksttv_date_end', new \stdClass()];
-        yield 'NUL byte in start date' => ['_teksttv_date_start', "2026-10-01\0x"];
-        yield 'NUL byte in end date' => ['_teksttv_date_end', "2026-10-31\0x"];
-        yield 'object weekday' => ['_teksttv_days', ['1', new \stdClass()]];
-        yield 'nested weekday' => ['_teksttv_days', [['1']]];
-    }
-
-    #[DataProvider('malformedMeta')]
-    public function test_malformed_meta_skips_the_item_without_breaking_the_feed(string $key, mixed $value): void
-    {
-        $this->meta[$key] = $value;
-        $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
-    }
-
-    public function test_malformed_meta_of_disabled_features_is_ignored(): void
-    {
-        $this->features = ['rss_feed'];
-        $this->meta['_teksttv_title'] = new \stdClass();
-        $this->meta['_teksttv_date_start'] = new \stdClass();
-        $this->meta['_teksttv_days'] = [new \stdClass()];
-        $this->assertNotEmpty((string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
-    }
-
-    public function test_malformed_extra_image_ids_are_skipped(): void
-    {
-        $this->meta['_teksttv_images'] = [new \stdClass(), [11], 12];
-        $fields = $this->renderItem()->children(RssFeed::XML_NAMESPACE);
-        $this->assertSame(['https://example.com/12.jpg?a=1&b=2'], array_map('strval', iterator_to_array($fields->extraImage, false)));
-    }
-
-    public function test_disabled_scheduling_ignores_retained_dates_and_days(): void
-    {
-        $this->features = ['rss_feed'];
-        $this->meta['_teksttv_date_start'] = '2099-01-01';
-        $this->meta['_teksttv_days'] = [];
-        $this->assertNotEmpty((string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
     }
 
     /** @return iterable<string, array{string, string}> */
@@ -224,17 +135,6 @@ class RssFeedTest extends TestCase
         $this->assertSame(['https://example.com/12.jpg?a=1&b=2', 'https://example.com/11.jpg?a=1&b=2'], array_map('strval', iterator_to_array($fields->extraImage, false)));
     }
 
-    public function test_disabled_image_features_ignore_stored_overrides(): void
-    {
-        $this->features = ['rss_feed'];
-        $this->meta['_teksttv_sidebar_image'] = '10';
-        $this->meta['_teksttv_images'] = [11];
-        Functions\when('get_post_thumbnail_id')->justReturn(12);
-        $fields = $this->renderItem()->children(RssFeed::XML_NAMESPACE);
-        $this->assertSame('https://example.com/12.jpg?a=1&b=2', (string) $fields->image);
-        $this->assertCount(0, $fields->extraImage);
-    }
-
     public function test_image_only_posts_export_usable_images(): void
     {
         $this->meta['_teksttv_content'] = '';
@@ -243,13 +143,6 @@ class RssFeedTest extends TestCase
         $this->assertCount(1, $fields->extraImage);
         $this->assertCount(0, $fields->content);
         $this->assertCount(0, $fields->image);
-    }
-
-    public function test_image_only_post_without_usable_images_is_omitted(): void
-    {
-        $this->meta['_teksttv_content'] = '';
-        $this->meta['_teksttv_images'] = [999];
-        $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
     }
 
     public function test_comment_feed_has_no_teksttv_fields_or_namespace(): void

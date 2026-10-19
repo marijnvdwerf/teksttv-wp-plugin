@@ -105,7 +105,8 @@ URI and local name, rather than relying on the `teksttv` prefix.
   receive TekstTV fields, and only while they are within **Maximale leeftijd
   berichten**. If scheduling is enabled, their start/end dates (inclusive) and
   allowed weekdays must match the current WordPress site date; invalid stored
-  dates exclude the post. As in the playout, disabled features ignore their stored post meta.
+  dates or weekdays exclude the post. As in the playout, disabled features
+  ignore their stored post meta.
 - `title` is plain text: the custom TekstTV title when that feature is enabled
   and a title is set, otherwise the post title.
 - `content` contains the TekstTV HTML with paragraphs, wrapped in CDATA. When
@@ -114,12 +115,14 @@ URI and local name, rather than relying on the `teksttv` prefix.
   a custom override (or explicit suppression), category image, then featured
   image.
 - `extraImage` is repeated in saved order, omitting unavailable attachments.
-  An empty URL from `teksttv_image_url` omits an image here and in `image`.
+  An empty URL from `teksttv_image_url` omits that image from `extraImage` and
+  `image` (the sidebar does not fall back).
   Image-only posts receive only `title` and `extraImage`; posts with neither
   text nor usable extra images receive no TekstTV fields.
 
-The playout uses the same per-post rules, but selects posts by channel, count
-and deduplication, and also shows password-protected posts.
+The playout uses the same per-post rules, but selects posts per articles block
+(taxonomy filters, count), skips posts already shown in the loop, and also shows
+password-protected posts.
 
 Poll the feed regularly and replace the imported TekstTV data for each returned
 item: if its TekstTV fields disappear, remove that item's imported TekstTV

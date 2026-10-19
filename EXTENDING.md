@@ -143,7 +143,7 @@ add_filter(
 );
 ```
 
-The callback receives the fallback URL, attachment ID and semantic slot. Return a URL string.
+The callback receives the fallback URL, attachment ID and semantic slot. Return a URL string. Returning `''` omits the image from article slides and the RSS export; an empty `text_sidebar` URL removes the sidebar image instead of falling back to the next source.
 
 ### Image attribution
 
