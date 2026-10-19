@@ -9,6 +9,10 @@ defined('ABSPATH') || exit;
 delete_option('teksttv_data_version');
 delete_option('teksttv_commercial_blocks');
 
+// RSS tests change these core options.
+update_option('posts_per_rss', 10);
+update_option('timezone_string', '');
+
 update_option('teksttv_channels', [['slug' => 'tv1', 'label' => 'TV 1']]);
 update_option('teksttv_preview_url', 'https://preview.example.test/');
 update_option('teksttv_duration_text', \TekstTV\Helpers::DURATION_DEFAULTS['teksttv_duration_text']);

@@ -8,17 +8,23 @@ final class RssFeed
 {
     public const XML_NAMESPACE = 'https://github.com/oszuidwest/teksttv-wp-plugin/rss/1.0';
 
+    private static bool $namespace_rendered = false;
+
     public static function init(): void
     {
         add_action('rss2_ns', [self::class, 'render_namespace']);
         add_action('rss2_item', [self::class, 'render_item']);
-        add_action('pre_get_posts', [self::class, 'prepare_request']);
+        // Run last so the decision sees the final feed query.
+        add_action('pre_get_posts', [self::class, 'prepare_request'], PHP_INT_MAX);
         add_filter('wp_headers', [self::class, 'filter_headers']);
     }
 
     /**
-     * Core checks feed validators before wp_headers and may exit with a 304.
-     * Post modification dates cannot represent metadata or scheduling changes.
+     * Drop the conditional request headers so core cannot answer 304.
+     *
+     * Core compares them with the last post modification before wp_headers runs.
+     * That date misses date/weekday transitions and changes that do not save a
+     * post, such as settings and category images.
      */
     public static function prepare_request(\WP_Query $query): void
     {
@@ -31,7 +37,7 @@ final class RssFeed
     }
 
     /**
-     * Re-evaluate publication rules on each poll, including after midnight.
+     * Send no-cache headers and drop the ETag, which wp_get_nocache_headers() keeps.
      *
      * @param array<string, string|false> $headers
      * @return array<string, string|false>
@@ -48,15 +54,17 @@ final class RssFeed
 
     public static function render_namespace(): void
     {
+        // Comment feeds also fire rss2_ns.
         if (Helpers::has_feature('rss_feed') && !is_comment_feed()) {
             echo ' xmlns:teksttv="' . esc_url(self::XML_NAMESPACE) . '"';
+            self::$namespace_rendered = true;
         }
     }
 
     public static function render_item(): void
     {
-        // Comment feeds fire commentrss2_item instead.
-        if (!Helpers::has_feature('rss_feed')) {
+        // Fields need the namespace, which custom feed templates may not declare.
+        if (!self::$namespace_rendered) {
             return;
         }
 
@@ -88,7 +96,7 @@ final class RssFeed
             }
         }
 
-        // Image-only posts are valid TekstTV items too.
+        // Like the playout, image-only posts are exported.
         if ($pages === [] && $images === []) {
             return;
         }
@@ -111,12 +119,12 @@ final class RssFeed
         }
     }
 
-    /** Emit XML 1.0 text, including literal CDATA terminators and legacy control characters. */
+    /** Emit plain text as XML 1.0: scrub invalid UTF-8, drop forbidden characters, then escape or wrap in split CDATA. */
     private static function render_element(string $name, string $value, bool $cdata = false): void
     {
         $value = wp_check_invalid_utf8($value, true);
         $value = preg_replace('/[^\x{9}\x{A}\x{D}\x{20}-\x{D7FF}\x{E000}-\x{FFFD}\x{10000}-\x{10FFFF}]/u', '', $value) ?? '';
-        $encoded = $cdata ? '<![CDATA[' . str_replace(']]>', ']]]]><![CDATA[>', $value) . ']]>' : esc_xml($value);
+        $encoded = $cdata ? '<![CDATA[' . str_replace(']]>', ']]]]><![CDATA[>', $value) . ']]>' : htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8');
 
         // phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped -- fixed internal element names; XML-escaped text or safely split CDATA above.
         echo "\t\t<teksttv:" . $name . '>' . $encoded . '</teksttv:' . $name . ">\n";

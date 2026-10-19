@@ -72,10 +72,11 @@ If no channels are stored, `tv1` is assumed.
 ## RSS export
 
 Enable **TekstTV opnemen in RSS** under Tekst TV → Instellingen → RSS to add
-TekstTV fields to the existing RSS 2.0 post feeds, including category and tag
-feeds. This feature is off by default. Atom, legacy RSS and comment feeds are
-unchanged. The normal RSS fields and the WordPress feed selection/size remain
-unchanged; this does not export a channel's playlist or apply its block filters.
+TekstTV fields to the existing RSS 2.0 feeds (main, category, tag, author,
+search, …); only items of type `post` receive them. This feature is off by
+default. Atom, RSS 0.92, RDF and comment feeds are unchanged. The normal RSS
+fields and the WordPress feed selection/size remain unchanged; this does not
+export a channel's playlist or apply its block filters.
 
 The namespace URI is
 `https://github.com/oszuidwest/teksttv-wp-plugin/rss/1.0`. It identifies the XML
@@ -100,12 +101,12 @@ URI and local name, rather than relying on the `teksttv` prefix.
 </rss>
 ```
 
-- Only published, non-password-protected posts with **TekstTV actief** enabled
+- Only published, non-password-protected posts with **Toon op Tekst TV** enabled
   receive TekstTV fields. If scheduling is enabled, their start/end dates
   (inclusive) and allowed weekdays must match the current WordPress site date.
   As in the playout, disabled features ignore their stored post meta.
-- `title` uses the custom TekstTV title when that feature is enabled and a title
-  is set; otherwise it uses the post title.
+- `title` is plain text: the custom TekstTV title when that feature is enabled
+  and a title is set, otherwise the post title.
 - `content` contains the TekstTV HTML with paragraphs, wrapped in CDATA. When
   **Meerdere slides** is enabled, page separators become `<hr />` boundaries.
 - `image` is optional and uses the same sidebar image selection as the playout:
@@ -120,9 +121,9 @@ item: if its TekstTV fields disappear, remove that item's imported TekstTV
 version. Missing fields do not remove the ordinary RSS item. Items that leave
 the feed window need a retention policy on the receiving narrowcaster.
 
-While enabled, RSS 2.0 post feeds are served without caching or conditional 304
-responses so metadata changes and date/weekday transitions are evaluated on
-every poll. Any hosting/CDN cache must also respect these no-cache headers or
+While enabled, RSS 2.0 feeds are served without caching or conditional 304
+responses, so date/weekday transitions and changes that do not save a post
+(settings, category images) show up on the next poll. Any hosting/CDN cache must also respect these no-cache headers or
 bypass these feed URLs. With the feature disabled, normal WordPress feed
 caching applies again.
 

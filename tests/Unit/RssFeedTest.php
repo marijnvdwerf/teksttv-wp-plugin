@@ -20,6 +20,7 @@ class RssFeedTest extends TestCase
     protected function setUp(): void
     {
         parent::setUp();
+        (new \ReflectionProperty(RssFeed::class, 'namespace_rendered'))->setValue(null, false);
         $this->features = [...Helpers::DEFAULT_FEATURES, 'rss_feed'];
         $this->meta = ['_teksttv_active' => '1', '_teksttv_content' => 'Eerste slide'];
         $this->post = self::makePost();
@@ -33,7 +34,6 @@ class RssFeedTest extends TestCase
         Functions\when('get_the_title')->justReturn('Gewone &amp; titel &lpar;regio&rpar;');
         Functions\when('is_comment_feed')->justReturn(false);
         Functions\when('wp_check_invalid_utf8')->returnArg();
-        Functions\when('esc_xml')->alias(fn($value) => htmlspecialchars($value, ENT_XML1 | ENT_QUOTES, 'UTF-8', false));
         Functions\when('esc_url')->returnArg();
         Functions\when('wpautop')->alias(fn($value) => '<p>' . $value . '</p>');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
@@ -49,6 +49,8 @@ class RssFeedTest extends TestCase
     {
         ob_start();
         try {
+            RssFeed::render_namespace();
+            ob_clean();
             RssFeed::render_item();
             $output = ob_get_contents();
         } finally {
@@ -70,6 +72,12 @@ class RssFeedTest extends TestCase
         $fields = $this->renderItem()->children(RssFeed::XML_NAMESPACE);
         $this->assertSame('Kop & <nieuws> café 📰', (string) $fields->title);
         $this->assertSame('<p>Tekst &amp; opmaak ]]> blijft behouden</p>', (string) $fields->content);
+    }
+
+    public function test_title_is_decoded_only_once(): void
+    {
+        $this->meta['_teksttv_title'] = 'Toon &amp;lt;tag&amp;gt; en &amp;amp;';
+        $this->assertSame('Toon &lt;tag&gt; en &amp;', (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->title);
     }
 
     public function test_falls_back_to_decoded_post_title(): void
@@ -111,7 +119,7 @@ class RssFeedTest extends TestCase
     }
 
     /** @return iterable<string, array{string, string}> */
-    public static function protectedPosts(): iterable
+    public static function ineligiblePosts(): iterable
     {
         yield 'draft' => ['post_status', 'draft'];
         yield 'private' => ['post_status', 'private'];
@@ -119,8 +127,8 @@ class RssFeedTest extends TestCase
         yield 'page' => ['post_type', 'page'];
     }
 
-    #[DataProvider('protectedPosts')]
-    public function test_non_public_posts_have_no_teksttv_fields(string $key, string $value): void
+    #[DataProvider('ineligiblePosts')]
+    public function test_ineligible_posts_have_no_teksttv_fields(string $key, string $value): void
     {
         $this->post->$key = $value;
         $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
@@ -169,11 +177,18 @@ class RssFeedTest extends TestCase
         $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
     }
 
-    public function test_comment_feed_has_no_teksttv_namespace(): void
+    public function test_comment_feed_has_no_teksttv_fields_or_namespace(): void
     {
         Functions\when('is_comment_feed')->justReturn(true);
+        $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
         $this->expectOutputString('');
         RssFeed::render_namespace();
+    }
+
+    public function test_fields_need_a_declared_namespace(): void
+    {
+        $this->expectOutputString('');
+        RssFeed::render_item();
     }
 
     public function test_namespace_is_only_registered_when_enabled(): void
