@@ -22,7 +22,8 @@ test('playout and RSS apply the shared article rules with explicit password poli
                 'impossible date' => ['_teksttv_date_start' => '2026-02-31'],
                 'expired' => ['_teksttv_date_end' => current_datetime()->modify('-1 day')->format('Y-m-d')],
                 'future' => ['_teksttv_date_start' => current_datetime()->modify('+1 day')->format('Y-m-d')],
-                'wrong weekday' => ['_teksttv_days' => []],
+                'no weekdays' => ['_teksttv_days' => []],
+                'object content' => ['_teksttv_content' => (object) ['tekst' => 'Eerste']],
                 'suppressed images' => [], 'password' => [],
             ];
             $results = [];
@@ -52,12 +53,22 @@ test('playout and RSS apply the shared article rules with explicit password poli
     expect(results.eligible.slides).toHaveLength(3);
     expect(results.eligible.slides[0]).toMatchObject({ type: 'text', title: 'Gedeelde kop', body: '<p>Eerste</p>\n' });
     expect(results.eligible.slides[1].body).toBe('<p>Tweede</p>\n');
+    expect(results.eligible.slides[1].image).toEqual(results.eligible.slides[0].image);
     expect(results.eligible.slides[2].type).toBe('image');
+    expect(results.eligible.slides[2].duration).not.toBe(results.eligible.slides[0].duration);
     expect(results.eligible.rss).toContain('<teksttv:title>Gedeelde kop</teksttv:title>');
     expect(results.eligible.rss).toContain('Eerste</p>\n\n<hr />\n<p>Tweede');
     expect(results.eligible.rss).toContain(results.eligible.slides[0].image.url);
     expect(results.eligible.rss).toContain(results.eligible.slides[2].url);
-    for (const name of ['inactive', 'invalid date', 'impossible date', 'expired', 'future', 'wrong weekday']) {
+    for (const name of [
+        'inactive',
+        'invalid date',
+        'impossible date',
+        'expired',
+        'future',
+        'no weekdays',
+        'object content',
+    ]) {
         expect(results[name].slides, name).toEqual([]);
         expect(results[name].rss, name).toBe('');
     }

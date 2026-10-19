@@ -4,7 +4,6 @@ namespace TekstTV\Tests\Unit;
 
 use Brain\Monkey\Functions;
 use PHPUnit\Framework\Attributes\DataProvider;
-use PHPUnit\Framework\Attributes\DataProviderExternal;
 use TekstTV\ArticleContent;
 use TekstTV\Helpers;
 
@@ -33,6 +32,7 @@ class ArticleContentTest extends TestCase
         Functions\when('get_post_meta')->alias(fn($id, $key) => $this->meta[$key] ?? '');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('wp_timezone')->justReturn(new \DateTimeZone('Europe/Amsterdam'));
+        Functions\when('get_post_datetime')->alias(fn($post) => \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $post->post_date, new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('get_the_title')->justReturn('Gewone titel');
         Functions\when('get_the_terms')->justReturn(false);
         Functions\when('get_post_thumbnail_id')->justReturn(false);
@@ -43,7 +43,7 @@ class ArticleContentTest extends TestCase
 
     public function test_prepares_title_pages_and_image_data_in_saved_order(): void
     {
-        $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), 11, 12]];
+        $this->meta += ['_teksttv_title' => 'Eigen kop', '_teksttv_sidebar_image' => '10', '_teksttv_images' => [12, 999, new \stdClass(), [11], 11, 12]];
         $this->meta['_teksttv_content'] = "Eerste\n---\nTweede";
         $article = ArticleContent::prepare($this->post);
         $this->assertSame('Eigen kop', $article['title']);
@@ -56,20 +56,29 @@ class ArticleContentTest extends TestCase
     public static function excludedMeta(): iterable
     {
         yield 'inactive' => ['_teksttv_active', '0'];
+        yield 'never activated' => ['_teksttv_active', ''];
         yield 'no content' => ['_teksttv_content', " \n\t"];
         yield 'only separators' => ['_teksttv_content', "---\n---"];
         yield 'corrupt content' => ['_teksttv_content', new \stdClass()];
+        yield 'array content' => ['_teksttv_content', ['Tekst']];
         yield 'corrupt title' => ['_teksttv_title', ['kop']];
+        yield 'object title' => ['_teksttv_title', new \stdClass()];
         yield 'future start' => ['_teksttv_date_start', '2026-10-20'];
         yield 'expired end' => ['_teksttv_date_end', '2026-10-18'];
         yield 'invalid start' => ['_teksttv_date_start', 'invalid'];
         yield 'invalid end' => ['_teksttv_date_end', 'invalid'];
         yield 'impossible date' => ['_teksttv_date_start', '2026-02-31'];
         yield 'NUL date' => ['_teksttv_date_end', "2026-10-19\0"];
+        yield 'NUL start date' => ['_teksttv_date_start', "2026-10-01\0x"];
         yield 'corrupt date' => ['_teksttv_date_start', new \stdClass()];
-        yield 'wrong weekday' => ['_teksttv_days', ['2']];
+        yield 'array start date' => ['_teksttv_date_start', ['2026-10-01']];
+        yield 'object end date' => ['_teksttv_date_end', new \stdClass()];
+        yield 'wrong weekday' => ['_teksttv_days', ['2', '3']];
         yield 'no weekdays' => ['_teksttv_days', []];
         yield 'corrupt weekday' => ['_teksttv_days', [new \stdClass()]];
+        yield 'partly corrupt weekdays' => ['_teksttv_days', ['1', new \stdClass()]];
+        yield 'imported weekday string' => ['_teksttv_days', '1,2,3'];
+        yield 'object weekdays' => ['_teksttv_days', new \stdClass()];
     }
 
     #[DataProvider('excludedMeta')]
@@ -91,16 +100,28 @@ class ArticleContentTest extends TestCase
         $this->meta += ['_teksttv_title' => new \stdClass(), '_teksttv_date_start' => new \stdClass(), '_teksttv_days' => []];
         $this->meta['_teksttv_images'] = [10];
         $this->meta['_teksttv_sidebar_image'] = '10';
+        Functions\when('get_post_thumbnail_id')->justReturn(12);
         $article = ArticleContent::prepare($this->post);
         $this->assertSame('Gewone titel', $article['title']);
         $this->assertSame([], $article['images']);
-        $this->assertNull($article['sidebar_image']);
+        $this->assertSame('https://example.com/12.jpg', $article['sidebar_image']['url']);
     }
 
-    #[DataProviderExternal(RssFeedTest::class, 'postAges')]
+    /** @return iterable<string, array{string, string, bool}> */
+    public static function postAges(): iterable
+    {
+        yield 'at the exclusive cutoff' => ['2026-10-19 12:00:00', '2026-09-19 12:00:00', false];
+        yield 'just after the cutoff' => ['2026-10-19 12:00:00', '2026-09-19 12:00:01', true];
+        yield 'across the spring DST change' => ['2026-04-01 12:00:00', '2026-03-02 11:30:00', false];
+        yield 'across the autumn DST change' => ['2026-11-01 12:00:00', '2026-10-02 12:30:00', true];
+        // 02:30 occurs twice on 2026-10-25; the post expires at the first and stays expired.
+        yield 'during the repeated autumn hour' => ['2026-10-25T01:00:00+00:00', '2026-09-25 02:30:00', false];
+    }
+
+    #[DataProvider('postAges')]
     public function test_age_cutoff_uses_calendar_days_across_dst(string $now, string $post_date, bool $eligible): void
     {
-        Functions\when('current_datetime')->justReturn(new \DateTimeImmutable($now, new \DateTimeZone('Europe/Amsterdam')));
+        Functions\when('current_datetime')->justReturn((new \DateTimeImmutable($now, new \DateTimeZone('Europe/Amsterdam')))->setTimezone(new \DateTimeZone('Europe/Amsterdam')));
         $this->post->post_date = $post_date;
         $this->assertSame($eligible, ArticleContent::prepare($this->post) !== null);
     }
@@ -115,7 +136,7 @@ class ArticleContentTest extends TestCase
 
     public function test_url_filter_suppresses_images_including_image_only_posts(): void
     {
-        $this->meta['_teksttv_images'] = [10];
+        $this->meta['_teksttv_images'] = [10, 999];
         $this->meta['_teksttv_sidebar_image'] = '11';
         Functions\when('apply_filters')->alias(fn($hook, $value) => $hook === 'teksttv_image_url' ? '' : $value);
         $article = ArticleContent::prepare($this->post);
@@ -129,6 +150,7 @@ class ArticleContentTest extends TestCase
     {
         $this->meta['_teksttv_content'] = '';
         $this->meta['_teksttv_images'] = [10];
+        $this->meta['_teksttv_sidebar_image'] = '11';
         $article = ArticleContent::prepare($this->post);
         $this->assertSame([], $article['pages']);
         $this->assertNull($article['sidebar_image']);

@@ -104,8 +104,9 @@ URI and local name, rather than relying on the `teksttv` prefix.
 - Only published, non-password-protected posts with **Toon op Tekst TV** enabled
   receive TekstTV fields, and only while they are within **Maximale leeftijd
   berichten**. If scheduling is enabled, their start/end dates (inclusive) and
-  allowed weekdays must match the current WordPress site date.
-  As in the playout, disabled features ignore their stored post meta.
+  allowed weekdays must match the current WordPress site date; invalid stored
+  dates or weekdays exclude the post. As in the playout, disabled features
+  ignore their stored post meta.
 - `title` is plain text: the custom TekstTV title when that feature is enabled
   and a title is set, otherwise the post title.
 - `content` contains the TekstTV HTML with paragraphs, wrapped in CDATA. When
@@ -114,16 +115,14 @@ URI and local name, rather than relying on the `teksttv` prefix.
   a custom override (or explicit suppression), category image, then featured
   image.
 - `extraImage` is repeated in saved order, omitting unavailable attachments.
+  An empty URL from `teksttv_image_url` omits that image from `extraImage` and
+  `image` (the sidebar does not fall back).
   Image-only posts receive only `title` and `extraImage`; posts with neither
   text nor usable extra images receive no TekstTV fields.
 
-The playout and RSS use the same per-post eligibility, title, page and image
-rules (`ArticleContent::prepare`). Invalid stored scheduling dates exclude the
-post in both, and an empty URL from `teksttv_image_url` suppresses an image.
-The callers intentionally select different sets of posts: the playout applies
-its channel taxonomy, count and deduplication rules and includes
-password-protected published posts; RSS follows the requested WordPress feed
-and never exposes TekstTV fields for password-protected posts.
+The playout uses the same per-post rules, but selects posts per articles block
+(taxonomy filters, count), skips posts already shown in the loop, and also shows
+password-protected posts.
 
 Attachment posts, their metadata and category images are primed once per feed
 or playout query batch, so image queries do not grow with the number of
@@ -135,13 +134,18 @@ version. Missing fields do not remove the ordinary RSS item. Items that leave
 the feed window need a retention policy on the receiving narrowcaster.
 
 RSS 2.0 feeds support ETag and Last-Modified conditional requests: unchanged
-polls return 304. Validators advance on post saves, feature or maximum-age
-changes, category images, and direct metadata writes through WordPress APIs.
-While export is enabled they also advance at midnight in the site timezone
-for date and weekday transitions, and when a feed post reaches the maximum age.
-Direct SQL writes bypass these hooks; importers
-must use the WordPress APIs. CDNs may cache feeds, but should revalidate on
-each poll to see these changes promptly.
+polls return 304. Validators advance when published posts are saved,
+unpublished or deleted; on changes to TekstTV feature toggles, the maximum-age
+setting or the timezone; on category and tag changes of published posts; and
+on writes through WordPress APIs to TekstTV fields, category images, featured
+images, the Yoast primary category or attachment files. A request's changes
+advance them once, after its last write. While export is enabled they also
+advance at midnight in the site timezone and when a feed post reaches the
+maximum age. Other feed content follows WordPress's own validator, which does
+not track changes such as the site title, term names, author names or comment
+counts. Direct SQL writes bypass these hooks; importers must use the WordPress
+APIs. CDNs may cache feeds, but should revalidate on each poll to see these
+changes promptly.
 
 ## REST API
 

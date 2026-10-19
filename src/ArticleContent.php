@@ -4,7 +4,7 @@ namespace TekstTV;
 
 use TekstTV\Blocks\Common\RecentPostsQuery;
 
-/** Per-post TekstTV rules shared by the playout and RSS; callers choose which posts to expose. */
+/** Per-post TekstTV rules shared by the playout and RSS; callers handle post type, status, password and query-level selection. */
 final class ArticleContent
 {
     /** @var array<int, true> Core never caches absent posts; skip them until the next prime_images(). */
@@ -67,6 +67,8 @@ final class ArticleContent
     }
 
     /**
+     * Null means inactive, too old, unscheduled, malformed or empty; the title keeps HTML entities (RSS decodes them).
+     *
      * @return array{title: string, pages: list<string>, sidebar_image: array<string, string>|null, images: list<array<string, string>>}|null
      */
     public static function prepare(\WP_Post $post): ?array
@@ -75,8 +77,9 @@ final class ArticleContent
             return null;
         }
 
-        $max_age = RecentPostsQuery::max_age_days();
-        if ($max_age > 0 && $post->post_date <= current_datetime()->modify('-' . $max_age . ' days')->format('Y-m-d H:i:s')) {
+        // An absolute instant, shared with the RSS validator, so a repeated DST hour cannot revive a post.
+        $expires = RecentPostsQuery::expires_at($post);
+        if ($expires !== null && $expires <= current_datetime()->getTimestamp()) {
             return null;
         }
 
@@ -84,10 +87,12 @@ final class ArticleContent
             $start = self::string_meta($post->ID, '_teksttv_date_start');
             $end = self::string_meta($post->ID, '_teksttv_date_end');
             $days = get_post_meta($post->ID, '_teksttv_days', true);
-            // Invalid stored dates are ineligible, consistently with the SQL pre-filter.
+            // Authoritative and stricter than the playout's SQL pre-filter: is_within_date_range() ignores
+            // unparseable dates and rolls over impossible ones, is_allowed_on_day() cannot stringify non-scalar
+            // days. '' days is missing meta (all days); any other non-array is malformed.
             if (
                 !self::valid_date($start) || !self::valid_date($end)
-                || (is_array($days) && array_filter($days, fn($day) => !is_scalar($day)) !== [])
+                || ($days !== '' && (!is_array($days) || array_filter($days, 'is_scalar') !== $days))
                 || !Helpers::is_block_scheduled(['date_start' => $start, 'date_end' => $end, 'days' => $days])
             ) {
                 return null;
@@ -204,7 +209,7 @@ final class ArticleContent
             }
         }
 
-        // Reuse the object-term cache primed by the articles query.
+        // Reuse the object-term cache primed by the caller's WP_Query.
         $categories = get_the_terms($post_id, 'category');
         foreach (is_array($categories) ? $categories : [] as $cat) {
             $data = self::get_category_image_data((int) $cat->term_id);
@@ -242,7 +247,7 @@ final class ArticleContent
 
     private static function thumbnail_id(int $post_id): int
     {
-        // Core casts _thumbnail_id to int, which warns for corrupt arrays and objects.
+        // Core's (int) cast turns a corrupt array or object into attachment 1; objects also warn.
         $raw = get_post_meta($post_id, '_thumbnail_id', true);
         return is_array($raw) || is_object($raw) ? 0 : (int) get_post_thumbnail_id($post_id);
     }

@@ -107,7 +107,7 @@ test.describe('RSS 2.0 export', () => {
         }
     });
 
-    test('re-evaluates expiry and metadata changes despite old conditional request headers', async ({
+    test('metadata writes without a post save invalidate conditional requests', async ({
         request,
         page,
         runWordPressPHP,
@@ -142,7 +142,12 @@ test.describe('RSS 2.0 export', () => {
             update_post_meta($post->ID, '_teksttv_date_end', current_time('Y-m-d'));
             update_post_meta($post->ID, '_teksttv_title', 'Opnieuw geldig');
         `);
-        const restored = await request.get('/?feed=rss2', { headers });
+        const restored = await request.get('/?feed=rss2', {
+            headers: {
+                'If-None-Match': expired.headers().etag,
+                'If-Modified-Since': expired.headers()['last-modified'],
+            },
+        });
         expect(restored.status()).toBe(200);
         expect(await restored.text()).toContain('<teksttv:title>Opnieuw geldig</teksttv:title>');
     });
@@ -156,6 +161,9 @@ test.describe('RSS 2.0 export', () => {
             update_option('posts_per_rss', 100);
         `);
         const first = await request.get('/?feed=rss2');
+        expect(
+            (await request.get('/?feed=rss2', { headers: { 'If-None-Match': first.headers().etag } })).status(),
+        ).toBe(304);
         await runWordPressPHP(`
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
             wp_update_post(['ID' => $post->ID, 'post_title' => 'Gewijzigd RSS artikel']);
@@ -190,6 +198,51 @@ test.describe('RSS 2.0 export', () => {
                 })
             ).status(),
         ).toBe(304);
+
+        // Category assignment without a post save changes the sidebar image too.
+        const term = await runWordPressPHP(`
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            $term = wp_get_post_categories($post->ID)[0];
+            wp_remove_object_terms($post->ID, $term, 'category');
+            echo $term;
+        `);
+        const removed = await request.get('/?feed=rss2', {
+            headers: { 'If-Modified-Since': changed.headers()['last-modified'] },
+        });
+        expect(removed.status()).toBe(200);
+        expect(await removed.text()).not.toContain('<teksttv:image>');
+        await runWordPressPHP(`
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            wp_set_object_terms($post->ID, [${Number(term)}], 'category');
+        `);
+        const assigned = await request.get('/?feed=rss2', {
+            headers: { 'If-Modified-Since': removed.headers()['last-modified'] },
+        });
+        expect(assigned.status()).toBe(200);
+        expect(await assigned.text()).toContain(`<teksttv:image>${imageUrl}</teksttv:image>`);
+    });
+
+    test('unpublishing the newest post invalidates validators that core would move back', async ({
+        request,
+        runWordPressPHP,
+    }) => {
+        await runWordPressPHP(`
+            update_option('teksttv_features', [...\\TekstTV\\Helpers::DEFAULT_FEATURES, 'rss_feed']);
+            update_option('posts_per_rss', 100);
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            wp_update_post(['ID' => $post->ID, 'post_title' => 'Nieuwste RSS artikel']);
+        `);
+        const first = await request.get('/?feed=rss2');
+        expect(await first.text()).toContain('Nieuwste RSS artikel');
+        await runWordPressPHP(`
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            wp_update_post(['ID' => $post->ID, 'post_status' => 'draft']);
+        `);
+        const unpublished = await request.get('/?feed=rss2', {
+            headers: { 'If-Modified-Since': first.headers()['last-modified'] },
+        });
+        expect(unpublished.status()).toBe(200);
+        expect(await unpublished.text()).not.toContain('Nieuwste RSS artikel');
     });
 
     test('site midnight advances validators and re-evaluates scheduling', async ({
