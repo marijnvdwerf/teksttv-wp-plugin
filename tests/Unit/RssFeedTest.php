@@ -33,7 +33,7 @@ class RssFeedTest extends TestCase
         Functions\when('get_post_meta')->alias(fn($id, $key) => $this->meta[$key] ?? '');
         Functions\when('get_the_title')->justReturn('Gewone &amp; titel &lpar;regio&rpar;');
         Functions\when('is_comment_feed')->justReturn(false);
-        Functions\when('wp_check_invalid_utf8')->returnArg();
+        Functions\when('wp_check_invalid_utf8')->alias(fn($value, $strip = false) => $strip ? mb_scrub($value, 'UTF-8') : $value);
         Functions\when('esc_url')->returnArg();
         Functions\when('wpautop')->alias(fn($value) => '<p>' . $value . '</p>');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
@@ -74,6 +74,12 @@ class RssFeedTest extends TestCase
         $this->assertSame('<p>Tekst &amp; opmaak ]]> blijft behouden</p>', (string) $fields->content);
     }
 
+    public function test_invalid_utf8_is_scrubbed_instead_of_emptying_fields(): void
+    {
+        $this->meta['_teksttv_title'] = "Caf\xC3 bezoek";
+        $this->assertStringContainsString('bezoek', (string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->title);
+    }
+
     public function test_title_is_decoded_only_once(): void
     {
         $this->meta['_teksttv_title'] = 'Toon &amp;lt;tag&amp;gt; en &amp;amp;';
@@ -96,6 +102,7 @@ class RssFeedTest extends TestCase
     public static function excludedMeta(): iterable
     {
         yield 'inactive' => ['_teksttv_active', '0'];
+        yield 'never activated' => ['_teksttv_active', ''];
         yield 'future start' => ['_teksttv_date_start', '2026-10-20'];
         yield 'expired end' => ['_teksttv_date_end', '2026-10-18'];
         yield 'wrong weekday' => ['_teksttv_days', ['2', '3']];

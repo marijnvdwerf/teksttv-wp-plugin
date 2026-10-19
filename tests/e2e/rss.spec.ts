@@ -147,7 +147,24 @@ test.describe('RSS 2.0 export', () => {
             const response = await request.get(feed);
             expect(response.status()).toBe(200);
             expect(await response.text()).not.toContain('xmlns:teksttv');
-            expect(response.headers().etag).toBeTruthy();
+            const etag = response.headers().etag;
+            expect(etag).toBeTruthy();
+            const cached = await request.get(feed, { headers: { 'If-None-Match': etag } });
+            expect(cached.status()).toBe(304);
         }
+    });
+
+    test('password-protected posts receive no TekstTV fields', async ({ request, page, runWordPressPHP }) => {
+        await runWordPressPHP(`
+            update_option('teksttv_features', [...\\TekstTV\\Helpers::DEFAULT_FEATURES, 'rss_feed']);
+            update_option('posts_per_rss', 100);
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            wp_update_post(['ID' => $post->ID, 'post_password' => 'geheim']);
+        `);
+        const items = await readFeed(page, await (await request.get('/?feed=rss2')).text());
+        // Core prefixes protected titles, e.g. "Protected: TekstTV Smoke Post".
+        const post = items.find((item) => item.title?.endsWith('TekstTV Smoke Post'));
+        expect(post).toBeDefined();
+        expect(post?.teksttv).toEqual([]);
     });
 });
