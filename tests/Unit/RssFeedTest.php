@@ -274,7 +274,8 @@ class RssFeedTest extends TestCase
 
     public function test_other_feeds_and_non_gmt_timezones_keep_core_validator(): void
     {
-        Functions\when('is_feed')->justReturn(false);
+        // An Atom feed: a feed, but not RSS 2.0.
+        Functions\when('is_feed')->alias(fn($feeds = '') => $feeds !== 'rss2');
         $this->assertSame('original', RssFeed::last_modified('original', 'GMT'));
         Functions\when('is_feed')->justReturn(true);
         $this->assertSame('original', RssFeed::last_modified('original', 'blog'));
