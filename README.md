@@ -136,13 +136,14 @@ the feed window need a retention policy on the receiving narrowcaster.
 RSS 2.0 feeds answer ETag and Last-Modified conditional requests with 304 while
 unchanged. Validators advance, from the next second, when published posts are
 saved, unpublished or deleted; when the TekstTV features, maximum age or
-timezone change; on category and tag changes of published posts; and on writes
-through WordPress APIs (not direct SQL) to TekstTV fields, category images,
-featured images, the Yoast primary category or attachment files. While export is
-enabled they also advance at midnight in the site timezone and when a feed post
-reaches the maximum age. Other content follows WordPress's own validator, which
-misses changes such as the site title, term names, author names or comment
-counts. CDNs may cache feeds but should revalidate on each poll.
+timezone change; on category, tag, TekstTV field, featured image or Yoast
+primary category changes of published posts; and on category image or
+attachment file changes. Only writes through WordPress APIs count, not direct
+SQL. While export is enabled they also advance at midnight in the site timezone
+and when a feed post reaches the maximum age. Other content follows WordPress's
+own validator, which misses changes such as the site title, term names, author
+names or comment counts. CDNs may cache feeds but should revalidate on each
+poll.
 
 ## REST API
 

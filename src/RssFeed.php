@@ -23,8 +23,9 @@ final class RssFeed
                 add_action($prefix . $option, [self::class, 'invalidate']);
             }
         }
-        foreach (['added_post_meta', 'updated_post_meta', 'deleted_post_meta', 'added_term_meta', 'updated_term_meta', 'deleted_term_meta'] as $hook) {
-            add_action($hook, [self::class, 'meta_changed'], 10, 3);
+        foreach (['added', 'updated', 'deleted'] as $action) {
+            add_action($action . '_post_meta', [self::class, 'post_meta_changed'], 10, 3);
+            add_action($action . '_term_meta', [self::class, 'meta_changed'], 10, 3);
         }
         add_action('transition_post_status', [self::class, 'post_transitioned'], 10, 3);
         // Force deletes fire no status transition.
@@ -71,6 +72,19 @@ final class RssFeed
         }
     }
 
+    /**
+     * Drafts and other post types cannot reach the feed, and publishing them fires a transition.
+     * Object ID 0 is delete_post_meta_by_key().
+     *
+     * @param int|array<int|string> $meta_ids
+     */
+    public static function post_meta_changed(int|array $meta_ids, int $object_id, string $key): void
+    {
+        if ($object_id === 0 || get_post_type($object_id) === 'attachment' || self::in_feed($object_id)) {
+            self::meta_changed($meta_ids, $object_id, $key);
+        }
+    }
+
     /** Saved and unpublished posts; core's date only covers posts that remain published. */
     public static function post_transitioned(string $new_status, string $old_status, \WP_Post $post): void
     {
@@ -81,9 +95,14 @@ final class RssFeed
 
     public static function terms_changed(int $post_id, string $taxonomy): void
     {
-        if (in_array($taxonomy, ['category', 'post_tag'], true) && get_post_type($post_id) === 'post' && get_post_status($post_id) === 'publish') {
+        if (in_array($taxonomy, ['category', 'post_tag'], true) && self::in_feed($post_id)) {
             self::invalidate();
         }
+    }
+
+    private static function in_feed(int $post_id): bool
+    {
+        return get_post_type($post_id) === 'post' && get_post_status($post_id) === 'publish';
     }
 
     /**
