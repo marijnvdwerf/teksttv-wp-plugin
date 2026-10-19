@@ -4,6 +4,12 @@ import { expect, type Page, test } from './test';
 
 const XML_NAMESPACE = 'https://github.com/oszuidwest/teksttv-wp-plugin/rss/1.0';
 
+/** Validators never run ahead of the clock, so wait until the stored revision is in the past. */
+async function settle(runWordPressPHP: (code: string) => Promise<string>) {
+    const ahead = Number(await runWordPressPHP("echo max(0, (int) get_option('teksttv_rss_modified') - time());"));
+    await new Promise((resolve) => setTimeout(resolve, ahead * 1000 + 1050 - (Date.now() % 1000)));
+}
+
 async function readFeed(page: Page, xml: string) {
     return page.evaluate(
         ({ xml, namespace }) => {
@@ -25,7 +31,11 @@ test.describe('RSS 2.0 export', () => {
     test.use({ storageState: { cookies: [], origins: [] } });
     test.afterEach(reseedFixtures);
 
-    test('settings persist the opt-in and invalidate both enabling and disabling export', async ({ page, request }) => {
+    test('settings persist the opt-in and invalidate both enabling and disabling export', async ({
+        page,
+        request,
+        runWordPressPHP,
+    }) => {
         const ordinary = await request.get('/?feed=rss2');
         expect(ordinary.status()).toBe(200);
         expect(await ordinary.text()).not.toContain('xmlns:teksttv');
@@ -39,6 +49,8 @@ test.describe('RSS 2.0 export', () => {
         await toggle.check();
         await page.click('#submit');
         await expect(toggle).toBeChecked();
+
+        await settle(runWordPressPHP);
 
         const enabled = await request.get('/?feed=rss2', {
             headers: { 'If-None-Match': etag, 'If-Modified-Since': 'Wed, 01 Jan 2098 00:00:00 GMT' },
@@ -55,6 +67,7 @@ test.describe('RSS 2.0 export', () => {
         await toggle.uncheck();
         await page.click('#submit');
         await expect(toggle).not.toBeChecked();
+        await settle(runWordPressPHP);
         const disabled = await request.get('/?feed=rss2', { headers: { 'If-None-Match': enabled.headers().etag } });
         expect(disabled.status()).toBe(200);
         expect(await disabled.text()).not.toContain('xmlns:teksttv');
@@ -119,6 +132,7 @@ test.describe('RSS 2.0 export', () => {
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
             update_post_meta($post->ID, '_teksttv_title', 'Nu geldig');
         `);
+        await settle(runWordPressPHP);
         const first = await request.get('/?feed=rss2');
         expect(first.status()).toBe(200);
         expect(await first.text()).toContain('<teksttv:title>Nu geldig</teksttv:title>');
@@ -132,6 +146,7 @@ test.describe('RSS 2.0 export', () => {
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
             update_post_meta($post->ID, '_teksttv_date_end', current_datetime()->modify('-1 day')->format('Y-m-d'));
         `);
+        await settle(runWordPressPHP);
         const expired = await request.get('/?feed=rss2', { headers });
         expect(expired.status()).toBe(200);
         const items = await readFeed(page, await expired.text());
@@ -142,6 +157,7 @@ test.describe('RSS 2.0 export', () => {
             update_post_meta($post->ID, '_teksttv_date_end', current_time('Y-m-d'));
             update_post_meta($post->ID, '_teksttv_title', 'Opnieuw geldig');
         `);
+        await settle(runWordPressPHP);
         const restored = await request.get('/?feed=rss2', {
             headers: {
                 'If-None-Match': expired.headers().etag,
@@ -160,6 +176,7 @@ test.describe('RSS 2.0 export', () => {
             update_option('teksttv_features', [...\\TekstTV\\Helpers::DEFAULT_FEATURES, 'rss_feed']);
             update_option('posts_per_rss', 100);
         `);
+        await settle(runWordPressPHP);
         const first = await request.get('/?feed=rss2');
         expect(
             (await request.get('/?feed=rss2', { headers: { 'If-None-Match': first.headers().etag } })).status(),
@@ -168,6 +185,7 @@ test.describe('RSS 2.0 export', () => {
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
             wp_update_post(['ID' => $post->ID, 'post_title' => 'Gewijzigd RSS artikel']);
         `);
+        await settle(runWordPressPHP);
         const saved = await request.get('/?feed=rss2', { headers: { 'If-None-Match': first.headers().etag } });
         expect(saved.status()).toBe(200);
         expect(await saved.text()).toContain('Gewijzigd RSS artikel');
@@ -181,6 +199,7 @@ test.describe('RSS 2.0 export', () => {
             $image = get_posts(['post_type' => 'attachment', 'numberposts' => 1])[0];
             echo wp_get_attachment_image_url($image->ID, 'large');
         `);
+        await settle(runWordPressPHP);
         const withoutImage = await request.get('/?feed=rss2');
         expect(await withoutImage.text()).not.toContain('<teksttv:image>');
         await runWordPressPHP(`
@@ -188,6 +207,7 @@ test.describe('RSS 2.0 export', () => {
             $image = get_posts(['post_type' => 'attachment', 'numberposts' => 1])[0];
             update_term_meta(wp_get_post_categories($post->ID)[0], '_teksttv_category_image', $image->ID);
         `);
+        await settle(runWordPressPHP);
         const changed = await request.get('/?feed=rss2', { headers: { 'If-None-Match': withoutImage.headers().etag } });
         expect(changed.status()).toBe(200);
         expect(await changed.text()).toContain(`<teksttv:image>${imageUrl}</teksttv:image>`);
@@ -206,6 +226,7 @@ test.describe('RSS 2.0 export', () => {
             wp_remove_object_terms($post->ID, $term, 'category');
             echo $term;
         `);
+        await settle(runWordPressPHP);
         const removed = await request.get('/?feed=rss2', {
             headers: { 'If-Modified-Since': changed.headers()['last-modified'] },
         });
@@ -215,6 +236,7 @@ test.describe('RSS 2.0 export', () => {
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
             wp_set_object_terms($post->ID, [${Number(term)}], 'category');
         `);
+        await settle(runWordPressPHP);
         const assigned = await request.get('/?feed=rss2', {
             headers: { 'If-Modified-Since': removed.headers()['last-modified'] },
         });
@@ -232,12 +254,14 @@ test.describe('RSS 2.0 export', () => {
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
             wp_update_post(['ID' => $post->ID, 'post_title' => 'Nieuwste RSS artikel']);
         `);
+        await settle(runWordPressPHP);
         const first = await request.get('/?feed=rss2');
         expect(await first.text()).toContain('Nieuwste RSS artikel');
         await runWordPressPHP(`
             $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
             wp_update_post(['ID' => $post->ID, 'post_status' => 'draft']);
         `);
+        await settle(runWordPressPHP);
         const unpublished = await request.get('/?feed=rss2', {
             headers: { 'If-Modified-Since': first.headers()['last-modified'] },
         });

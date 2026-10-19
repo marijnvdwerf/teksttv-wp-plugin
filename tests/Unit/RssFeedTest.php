@@ -307,18 +307,22 @@ class RssFeedTest extends TestCase
     {
         return [
             'after a post save in the same second' => ['2026-10-19 10:00:00', '2026-10-19 10:00:00'],
+            'in the second before local midnight' => ['2026-10-18 21:59:59', '2026-10-01 12:00:00'],
             'at local midnight' => ['2026-10-18 22:00:00', '2026-10-01 12:00:00'],
         ];
     }
 
-    /** A response, then a write in that same second, must not leave conditional requests matching. */
+    /** Responses served before or after a write in the same second must not match a second later. */
     #[DataProvider('servedSeconds')]
     public function test_write_in_the_served_second_advances_the_validator(string $now_gmt, string $core_gmt): void
     {
         $stored = 0;
         $now = strtotime($now_gmt . ' GMT');
-        Functions\when('TekstTV\\time')->justReturn($now);
-        Functions\when('current_datetime')->justReturn((new \DateTimeImmutable('@' . $now))->setTimezone(new \DateTimeZone('Europe/Amsterdam')));
+        $at = function (int $time) {
+            Functions\when('TekstTV\\time')->justReturn($time);
+            Functions\when('current_datetime')->justReturn((new \DateTimeImmutable('@' . $time))->setTimezone(new \DateTimeZone('Europe/Amsterdam')));
+        };
+        $at($now);
         Functions\when('is_feed')->justReturn(true);
         Functions\when('get_option')->alias(function ($key, $default = false) use (&$stored) {
             return match ($key) {
@@ -334,11 +338,25 @@ class RssFeedTest extends TestCase
         });
         Functions\when('get_lastpostmodified')->justReturn($core_gmt);
 
-        $served = RssFeed::last_modified($core_gmt, 'GMT');
-        $this->assertSame($now_gmt, $served);
+        $before = RssFeed::last_modified($core_gmt, 'GMT');
         RssFeed::invalidate();
         RssFeed::save_revision();
-        $this->assertGreaterThan($served, RssFeed::last_modified($core_gmt, 'GMT'));
+        $after = RssFeed::last_modified($core_gmt, 'GMT');
+        $this->assertLessThanOrEqual($now_gmt, $after);
+        $at($now + 1);
+        $this->assertGreaterThan(max($before, $after), RssFeed::last_modified($core_gmt, 'GMT'));
+    }
+
+    public function test_future_revisions_are_served_as_the_current_time(): void
+    {
+        Functions\when('is_feed')->justReturn(true);
+        Functions\when('get_option')->alias(fn($key, $default = false) => match ($key) {
+            'teksttv_features' => $this->features,
+            'teksttv_max_post_age' => $this->max_age,
+            'teksttv_rss_modified' => strtotime('2026-10-19 10:30:00 GMT'),
+            default => $default,
+        });
+        $this->assertSame('2026-10-19 10:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
     }
 
     public function test_shutdown_writes_the_revision_of_each_changed_site(): void

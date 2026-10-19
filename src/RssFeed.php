@@ -47,8 +47,8 @@ final class RssFeed
 
         // Retain the revision while disabled: turning export off changes the XML too.
         $timestamp = self::revision($modified);
+        $now = current_datetime();
         if (Helpers::has_feature('rss_feed')) {
-            $now = current_datetime();
             $timestamp = max($timestamp, $now->setTime(0, 0)->getTimestamp());
             // Age eligibility can expire within the day, without a post save.
             global $wp_query;
@@ -66,6 +66,8 @@ final class RssFeed
                 }
             }
         }
+        // Never in the future (RFC 9110): a revision ahead of the clock would absorb midnight and expiry.
+        $timestamp = min($timestamp, $now->getTimestamp());
         return $timestamp > 0 ? gmdate('Y-m-d H:i:s', $timestamp) : $modified;
     }
 

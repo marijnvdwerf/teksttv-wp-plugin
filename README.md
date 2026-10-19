@@ -128,13 +128,13 @@ unpublished or deleted; on changes to TekstTV feature toggles, the maximum-age
 setting or the timezone; on category and tag changes of published posts; and
 on writes through WordPress APIs to TekstTV fields, category images, featured
 images, the Yoast primary category or attachment files. A request's changes
-advance them once, after its last write. While export is enabled they also
-advance at midnight in the site timezone and when a feed post reaches the
-maximum age. Other feed content follows WordPress's own validator, which does
-not track changes such as the site title, term names, author names or comment
-counts. Direct SQL writes bypass these hooks; importers must use the WordPress
-APIs. CDNs may cache feeds, but should revalidate on each poll to see these
-changes promptly.
+advance them once, after its last write, and show from the next second. While
+export is enabled they also advance at midnight in the site timezone and when a
+feed post reaches the maximum age. Other feed content follows WordPress's own
+validator, which does not track changes such as the site title, term names,
+author names or comment counts. Direct SQL writes bypass these hooks; importers
+must use the WordPress APIs. CDNs may cache feeds, but should revalidate on each
+poll to see these changes promptly.
 
 ## REST API
 
