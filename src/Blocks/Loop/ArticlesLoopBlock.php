@@ -224,7 +224,8 @@ final class ArticlesLoopBlock
             if ($override_id === '0' || $override_id === 0) {
                 return null;
             }
-            if ($override_id) {
+            // Corrupt meta (arrays, objects) counts as no override.
+            if (is_numeric($override_id) && $override_id) {
                 $data = Helpers::get_image_data((int) $override_id, 'large', 'text_sidebar');
                 if ($data) {
                     return $data;
@@ -234,7 +235,7 @@ final class ArticlesLoopBlock
 
         /** @var int|string|false $primary_term_id */
         $primary_term_id = apply_filters('teksttv_primary_category', get_post_meta($post_id, '_yoast_wpseo_primary_category', true), $post_id);
-        if ($primary_term_id) {
+        if (is_numeric($primary_term_id) && $primary_term_id) {
             $data = self::get_category_image_data((int) $primary_term_id);
             if ($data) {
                 return $data;
@@ -250,7 +251,9 @@ final class ArticlesLoopBlock
             }
         }
 
-        $thumb_id = get_post_thumbnail_id($post_id);
+        // Core casts _thumbnail_id to int, which warns for corrupt arrays and objects.
+        $raw_thumb_id = get_post_meta($post_id, '_thumbnail_id', true);
+        $thumb_id = is_array($raw_thumb_id) || is_object($raw_thumb_id) ? 0 : get_post_thumbnail_id($post_id);
         if ($thumb_id) {
             return Helpers::get_image_data((int) $thumb_id, 'large', 'text_sidebar');
         }
@@ -264,7 +267,7 @@ final class ArticlesLoopBlock
     private static function get_category_image_data(int $term_id): ?array
     {
         $image_id = get_term_meta($term_id, '_teksttv_category_image', true);
-        if (!$image_id) {
+        if (!is_numeric($image_id) || !$image_id) {
             return null;
         }
 

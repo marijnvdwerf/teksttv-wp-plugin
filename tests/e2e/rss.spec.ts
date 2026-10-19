@@ -154,6 +154,25 @@ test.describe('RSS 2.0 export', () => {
         }
     });
 
+    test('corrupt TekstTV meta skips the item and keeps the feed well-formed', async ({
+        request,
+        page,
+        runWordPressPHP,
+    }) => {
+        await runWordPressPHP(`
+            update_option('teksttv_features', [...\\TekstTV\\Helpers::DEFAULT_FEATURES, 'rss_feed']);
+            update_option('posts_per_rss', 100);
+            $post = get_page_by_path('teksttv-smoke-post', OBJECT, 'post');
+            update_post_meta($post->ID, '_teksttv_content', new stdClass());
+        `);
+        const xml = await (await request.get('/?feed=rss2')).text();
+        expect(xml).toContain('</rss>');
+        const items = await readFeed(page, xml);
+        const post = items.find((item) => item.title === 'TekstTV Smoke Post');
+        expect(post).toBeDefined();
+        expect(post?.teksttv).toEqual([]);
+    });
+
     test('password-protected posts receive no TekstTV fields', async ({ request, page, runWordPressPHP }) => {
         await runWordPressPHP(`
             update_option('teksttv_features', [...\\TekstTV\\Helpers::DEFAULT_FEATURES, 'rss_feed']);

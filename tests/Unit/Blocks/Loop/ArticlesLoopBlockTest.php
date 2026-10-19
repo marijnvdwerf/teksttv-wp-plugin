@@ -3,6 +3,7 @@
 namespace TekstTV\Tests\Unit\Blocks\Loop;
 
 use Brain\Monkey\Functions;
+use PHPUnit\Framework\Attributes\DataProvider;
 use TekstTV\Blocks\Loop\ArticlesLoopBlock;
 use TekstTV\Tests\Unit\TestCase;
 
@@ -243,6 +244,41 @@ class ArticlesLoopBlockTest extends TestCase
 
         $result = ArticlesLoopBlock::get_sidebar_image_data(1);
         $this->assertSame('https://example.com/thumb.jpg', $result['url']);
+    }
+
+    /** @return iterable<string, array{mixed, mixed, mixed}> */
+    public static function corruptSidebarIds(): iterable
+    {
+        yield 'object override' => [new \stdClass(), '', ''];
+        yield 'array primary category' => ['', ['10'], ''];
+        yield 'array category image' => ['', '', ['88']];
+    }
+
+    #[DataProvider('corruptSidebarIds')]
+    public function test_sidebar_image_treats_corrupt_ids_as_unavailable(mixed $override, mixed $primary, mixed $category_image): void
+    {
+        Functions\when('get_option')->justReturn(['sidebar_image']);
+        Functions\when('get_post_meta')->alias(fn($id, $key) => $key === '_teksttv_sidebar_image' ? $override : '');
+        Functions\when('get_the_terms')->justReturn([(object) ['term_id' => 10]]);
+        // A corrupt ID cast to int becomes 1, which resolves to an image here.
+        Functions\when('get_term_meta')->alias(fn($term_id) => $term_id === 1 ? '5' : $category_image);
+        Functions\when('get_post_thumbnail_id')->justReturn(77);
+        Functions\when('wp_get_attachment_image_url')->alias(fn($id) => 'https://example.com/' . $id . '.jpg');
+        Functions\when('wp_get_attachment_caption')->justReturn('');
+        Functions\when('apply_filters')->alias(fn($tag, $value) => $tag === 'teksttv_primary_category' ? $primary : $value);
+
+        $this->assertSame('https://example.com/77.jpg', ArticlesLoopBlock::get_sidebar_image_data(1)['url']);
+    }
+
+    public function test_sidebar_image_ignores_corrupt_thumbnail_meta(): void
+    {
+        Functions\when('get_option')->justReturn(['sidebar_image']);
+        Functions\when('get_post_meta')->alias(fn($id, $key) => $key === '_thumbnail_id' ? new \stdClass() : '');
+        Functions\when('get_the_terms')->justReturn(false);
+        Functions\when('apply_filters')->returnArg(2);
+        Functions\expect('get_post_thumbnail_id')->never();
+
+        $this->assertNull(ArticlesLoopBlock::get_sidebar_image_data(1));
     }
 
     public function test_sidebar_image_returns_null_when_nothing_found(): void

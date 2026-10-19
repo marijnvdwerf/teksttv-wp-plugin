@@ -148,6 +148,43 @@ class RssFeedTest extends TestCase
         $this->assertNotEmpty((string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
     }
 
+    /** @return iterable<string, array{string, mixed}> */
+    public static function malformedMeta(): iterable
+    {
+        yield 'object content' => ['_teksttv_content', new \stdClass()];
+        yield 'array content' => ['_teksttv_content', ['Eerste slide']];
+        yield 'object title' => ['_teksttv_title', new \stdClass()];
+        yield 'array start date' => ['_teksttv_date_start', ['2026-10-01']];
+        yield 'object end date' => ['_teksttv_date_end', new \stdClass()];
+        yield 'NUL byte in start date' => ['_teksttv_date_start', "2026-10-01\0x"];
+        yield 'NUL byte in end date' => ['_teksttv_date_end', "2026-10-31\0x"];
+        yield 'object weekday' => ['_teksttv_days', ['1', new \stdClass()]];
+        yield 'nested weekday' => ['_teksttv_days', [['1']]];
+    }
+
+    #[DataProvider('malformedMeta')]
+    public function test_malformed_meta_skips_the_item_without_breaking_the_feed(string $key, mixed $value): void
+    {
+        $this->meta[$key] = $value;
+        $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
+    }
+
+    public function test_malformed_meta_of_disabled_features_is_ignored(): void
+    {
+        $this->features = ['rss_feed'];
+        $this->meta['_teksttv_title'] = new \stdClass();
+        $this->meta['_teksttv_date_start'] = new \stdClass();
+        $this->meta['_teksttv_days'] = [new \stdClass()];
+        $this->assertNotEmpty((string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
+    }
+
+    public function test_malformed_extra_image_ids_are_skipped(): void
+    {
+        $this->meta['_teksttv_images'] = [new \stdClass(), [11], 12];
+        $fields = $this->renderItem()->children(RssFeed::XML_NAMESPACE);
+        $this->assertSame(['https://example.com/12.jpg?a=1&b=2'], array_map('strval', iterator_to_array($fields->extraImage, false)));
+    }
+
     public function test_disabled_scheduling_ignores_retained_dates_and_days(): void
     {
         $this->features = ['rss_feed'];

@@ -84,19 +84,34 @@ final class RssFeed
             return;
         }
 
-        $scheduled = !Helpers::has_feature('scheduling') || Helpers::is_block_scheduled([
-            'date_start' => (string) get_post_meta($post->ID, '_teksttv_date_start', true),
-            'date_end' => (string) get_post_meta($post->ID, '_teksttv_date_end', true),
-            'days' => get_post_meta($post->ID, '_teksttv_days', true),
-        ]);
-        if (!$scheduled) {
+        // Imported or corrupt meta can hold arrays or objects; skip the item instead of breaking the feed.
+        if (Helpers::has_feature('scheduling')) {
+            $start = self::string_meta($post->ID, '_teksttv_date_start');
+            $end = self::string_meta($post->ID, '_teksttv_date_end');
+            $days = get_post_meta($post->ID, '_teksttv_days', true);
+            // DateTime rejects NUL bytes with a ValueError.
+            if (
+                $start === null || $end === null || str_contains($start . $end, "\0")
+                || (is_array($days) && array_filter($days, fn($day) => !is_scalar($day)) !== [])
+                || !Helpers::is_block_scheduled(['date_start' => $start, 'date_end' => $end, 'days' => $days])
+            ) {
+                return;
+            }
+        }
+
+        $content = self::string_meta($post->ID, '_teksttv_content');
+        $override = Helpers::has_feature('custom_title') ? self::string_meta($post->ID, '_teksttv_title') : '';
+        if ($content === null || $override === null) {
             return;
         }
 
-        $pages = ArticlesLoopBlock::split_pages((string) get_post_meta($post->ID, '_teksttv_content', true));
+        $pages = ArticlesLoopBlock::split_pages($content);
         $images = [];
         $attachment_ids = Helpers::has_feature('extra_images') ? get_post_meta($post->ID, '_teksttv_images', true) : [];
         foreach (is_array($attachment_ids) ? $attachment_ids : [] as $attachment_id) {
+            if (!is_numeric($attachment_id)) {
+                continue;
+            }
             $image = Helpers::get_image_data((int) $attachment_id, 'large', 'image_slide');
             if (!empty($image['url'])) {
                 $images[] = $image['url'];
@@ -108,8 +123,7 @@ final class RssFeed
             return;
         }
 
-        $override = Helpers::has_feature('custom_title') ? get_post_meta($post->ID, '_teksttv_title', true) : '';
-        $title = !empty($override) ? (string) $override : get_the_title($post);
+        $title = !empty($override) ? $override : get_the_title($post);
         self::render_element('title', html_entity_decode($title, ENT_QUOTES | ENT_HTML5, 'UTF-8'));
 
         if ($pages !== []) {
@@ -124,6 +138,12 @@ final class RssFeed
         foreach ($images as $url) {
             self::render_element('extraImage', $url);
         }
+    }
+
+    private static function string_meta(int $post_id, string $key): ?string
+    {
+        $value = get_post_meta($post_id, $key, true);
+        return is_string($value) ? $value : null;
     }
 
     /** Emit plain text as XML 1.0: scrub invalid UTF-8, drop forbidden characters, then escape or wrap in split CDATA. */
