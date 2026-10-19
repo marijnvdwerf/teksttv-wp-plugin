@@ -6,6 +6,8 @@ use TekstTV\Blocks\Loop\ArticlesLoopBlock;
 use TekstTV\Helpers;
 use TekstTV\RssFeed;
 
+defined('ABSPATH') || exit;
+
 update_option('teksttv_features', [...Helpers::DEFAULT_FEATURES, 'rss_feed']);
 $results = [];
 $created_posts = [];
