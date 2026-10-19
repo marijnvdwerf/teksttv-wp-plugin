@@ -2,6 +2,7 @@
 
 namespace TekstTV;
 
+use TekstTV\Blocks\Common\RecentPostsQuery;
 use TekstTV\Blocks\Loop\ArticlesLoopBlock;
 
 final class RssFeed
@@ -74,6 +75,12 @@ final class RssFeed
             || $post->post_password !== ''
             || get_post_meta($post->ID, '_teksttv_active', true) !== '1'
         ) {
+            return;
+        }
+
+        // Same exclusive cutoff as the playout's date_query: calendar days in the site timezone.
+        $max_age = RecentPostsQuery::max_age_days();
+        if ($max_age > 0 && $post->post_date <= current_datetime()->modify('-' . $max_age . ' days')->format('Y-m-d H:i:s')) {
             return;
         }
 

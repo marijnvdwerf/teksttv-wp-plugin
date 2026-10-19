@@ -102,8 +102,9 @@ URI and local name, rather than relying on the `teksttv` prefix.
 ```
 
 - Only published, non-password-protected posts with **Toon op Tekst TV** enabled
-  receive TekstTV fields. If scheduling is enabled, their start/end dates
-  (inclusive) and allowed weekdays must match the current WordPress site date.
+  receive TekstTV fields, and only while they are within **Maximale leeftijd
+  berichten**. If scheduling is enabled, their start/end dates (inclusive) and
+  allowed weekdays must match the current WordPress site date.
   As in the playout, disabled features ignore their stored post meta.
 - `title` is plain text: the custom TekstTV title when that feature is enabled
   and a title is set, otherwise the post title.

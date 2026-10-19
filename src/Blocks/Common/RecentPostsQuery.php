@@ -29,7 +29,7 @@ final class RecentPostsQuery
             $args['post__not_in'] = $exclude;
         }
 
-        $max_age = (int) get_option('teksttv_max_post_age', 30);
+        $max_age = self::max_age_days();
         if ($max_age > 0) {
             $args['date_query'] = [
                 ['after' => $max_age . ' days ago'],
@@ -42,5 +42,11 @@ final class RecentPostsQuery
         }
 
         return array_merge($args, $extra);
+    }
+
+    /** Maximum post age in days; 0 disables the limit. */
+    public static function max_age_days(): int
+    {
+        return (int) get_option('teksttv_max_post_age', 30);
     }
 }

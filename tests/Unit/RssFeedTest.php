@@ -17,6 +17,8 @@ class RssFeedTest extends TestCase
 
     private \WP_Post $post;
 
+    private int $max_age = 30;
+
     protected function setUp(): void
     {
         parent::setUp();
@@ -27,8 +29,13 @@ class RssFeedTest extends TestCase
         $this->post->post_type = 'post';
         $this->post->post_status = 'publish';
         $this->post->post_password = '';
+        $this->post->post_date = '2026-10-19 11:00:00';
 
-        Functions\when('get_option')->alias(fn($key, $default = false) => $key === 'teksttv_features' ? $this->features : $default);
+        Functions\when('get_option')->alias(fn($key, $default = false) => match ($key) {
+            'teksttv_features' => $this->features,
+            'teksttv_max_post_age' => $this->max_age,
+            default => $default,
+        });
         Functions\when('get_post')->alias(fn() => $this->post);
         Functions\when('get_post_meta')->alias(fn($id, $key) => $this->meta[$key] ?? '');
         Functions\when('get_the_title')->justReturn('Gewone &amp; titel &lpar;regio&rpar;');
@@ -115,6 +122,30 @@ class RssFeedTest extends TestCase
     {
         $this->meta[$key] = $value;
         $this->assertCount(0, $this->renderItem()->children(RssFeed::XML_NAMESPACE));
+    }
+
+    /** @return iterable<string, array{string, string, bool}> */
+    public static function postAges(): iterable
+    {
+        yield 'at the exclusive cutoff' => ['2026-10-19 12:00:00', '2026-09-19 12:00:00', false];
+        yield 'just after the cutoff' => ['2026-10-19 12:00:00', '2026-09-19 12:00:01', true];
+        yield 'across the spring DST change' => ['2026-04-01 12:00:00', '2026-03-02 11:30:00', false];
+        yield 'across the autumn DST change' => ['2026-11-01 12:00:00', '2026-10-02 12:30:00', true];
+    }
+
+    #[DataProvider('postAges')]
+    public function test_max_age_uses_the_playout_cutoff(string $now, string $post_date, bool $exported): void
+    {
+        Functions\when('current_datetime')->justReturn(new \DateTimeImmutable($now, new \DateTimeZone('Europe/Amsterdam')));
+        $this->post->post_date = $post_date;
+        $this->assertSame($exported, count($this->renderItem()->children(RssFeed::XML_NAMESPACE)) > 0);
+    }
+
+    public function test_zero_max_age_disables_the_age_limit(): void
+    {
+        $this->max_age = 0;
+        $this->post->post_date = '2025-01-01 00:00:00';
+        $this->assertNotEmpty((string) $this->renderItem()->children(RssFeed::XML_NAMESPACE)->content);
     }
 
     public function test_disabled_scheduling_ignores_retained_dates_and_days(): void
