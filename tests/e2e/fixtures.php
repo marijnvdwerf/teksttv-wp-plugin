@@ -9,10 +9,10 @@ defined('ABSPATH') || exit;
 delete_option('teksttv_data_version');
 delete_option('teksttv_commercial_blocks');
 
-// RSS tests change these core options.
+// RSS tests change these options and the midnight test installs a clock mu-plugin.
 update_option('posts_per_rss', 10);
 update_option('timezone_string', '');
-// A timed-out RSS midnight test cannot run its own cleanup.
+update_option('teksttv_max_post_age', 30);
 if (file_exists(WPMU_PLUGIN_DIR . '/rss-clock.php')) {
     unlink(WPMU_PLUGIN_DIR . '/rss-clock.php');
 }
