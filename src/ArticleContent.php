@@ -79,16 +79,10 @@ final class ArticleContent
         return is_string($value) ? $value : null;
     }
 
+    /** Empty or a Y-m-d date that sanitizing leaves unchanged. */
     private static function valid_date(?string $date): bool
     {
-        if ($date === null || str_contains($date, "\0")) {
-            return false;
-        }
-        if ($date === '') {
-            return true;
-        }
-        $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
-        return $parsed && $parsed->format('Y-m-d') === $date;
+        return $date !== null && Helpers::sanitize_date_input($date) === $date;
     }
 
     /**

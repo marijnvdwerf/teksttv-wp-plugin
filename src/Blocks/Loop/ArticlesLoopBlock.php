@@ -161,16 +161,4 @@ final class ArticlesLoopBlock
 
         return $slides;
     }
-
-    /** @return list<string> */
-    public static function split_pages(string $content): array
-    {
-        return ArticleContent::split_pages($content);
-    }
-
-    /** @return array<string, string>|null */
-    public static function get_sidebar_image_data(int $post_id): ?array
-    {
-        return ArticleContent::get_sidebar_image_data($post_id);
-    }
 }
