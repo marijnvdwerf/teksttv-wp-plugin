@@ -23,6 +23,8 @@ class RssFeedTest extends TestCase
     {
         parent::setUp();
         (new \ReflectionProperty(RssFeed::class, 'namespace_rendered'))->setValue(null, false);
+        (new \ReflectionProperty(RssFeed::class, 'changed_blogs'))->setValue(null, []);
+        Functions\when('get_current_blog_id')->justReturn(1);
         $this->features = [...Helpers::DEFAULT_FEATURES, 'rss_feed'];
         $this->meta = ['_teksttv_active' => '1', '_teksttv_content' => 'Eerste slide'];
         $this->post = self::makePost();
@@ -44,7 +46,9 @@ class RssFeedTest extends TestCase
         Functions\when('esc_url')->returnArg();
         Functions\when('wpautop')->alias(fn($value) => '<p>' . $value . '</p>');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
+        Functions\when('TekstTV\\time')->justReturn(strtotime('2026-10-19 10:00:00 GMT'));
         Functions\when('wp_timezone')->justReturn(new \DateTimeZone('Europe/Amsterdam'));
+        Functions\when('get_post_datetime')->alias(fn($post) => \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $post->post_date, new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('get_the_terms')->justReturn(false);
         Functions\when('get_post_thumbnail_id')->justReturn(false);
         Functions\when('apply_filters')->alias(fn($hook, $value) => $value);
@@ -247,8 +251,8 @@ class RssFeedTest extends TestCase
     {
         $this->features = Helpers::DEFAULT_FEATURES;
         Functions\when('is_feed')->justReturn(true);
-        Functions\when('get_option')->alias(fn($key, $default = false) => $key === 'teksttv_rss_modified' ? strtotime('2026-10-19 10:00:00 GMT') : $default);
-        $this->assertSame('2026-10-19 10:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
+        Functions\when('get_option')->alias(fn($key, $default = false) => $key === 'teksttv_rss_modified' ? strtotime('2026-10-18 10:00:00 GMT') : $default);
+        $this->assertSame('2026-10-18 10:00:00', RssFeed::last_modified('2026-10-01 12:00:00', 'GMT'));
     }
 
     public function test_age_expiry_advances_the_validator_within_the_same_day(): void
@@ -268,31 +272,183 @@ class RssFeedTest extends TestCase
         }
     }
 
-    public function test_other_feeds_and_timezone_formats_keep_core_validator(): void
+    public function test_other_feeds_and_non_gmt_timezones_keep_core_validator(): void
     {
         Functions\when('is_feed')->justReturn(false);
         $this->assertSame('original', RssFeed::last_modified('original', 'GMT'));
         Functions\when('is_feed')->justReturn(true);
+        $this->assertSame('original', RssFeed::last_modified('original', 'blog'));
         Functions\when('is_comment_feed')->justReturn(true);
         $this->assertSame('original', RssFeed::last_modified('original', 'GMT'));
-        $this->assertSame('original', RssFeed::last_modified('original', 'blog'));
     }
 
-    public function test_invalidation_advances_past_core_and_runs_once_per_request(): void
+    public function test_invalidation_writes_once_at_shutdown_past_core(): void
     {
-        (new \ReflectionProperty(RssFeed::class, 'invalidated'))->setValue(null, false);
-        $future = time() + 60;
-        Functions\when('get_lastpostmodified')->justReturn(gmdate('Y-m-d H:i:s', $future));
-        Functions\expect('update_option')->once()->with('teksttv_rss_modified', $future + 1, false)->andReturn(true);
-        RssFeed::invalidate();
-        RssFeed::invalidate();
-    }
-
-    public function test_unrelated_option_and_meta_changes_do_not_invalidate(): void
-    {
-        (new \ReflectionProperty(RssFeed::class, 'invalidated'))->setValue(null, false);
         Functions\expect('update_option')->never();
-        RssFeed::option_changed('unrelated');
-        RssFeed::meta_changed(1, 42, 'unrelated');
+        RssFeed::invalidate();
+        $this->assertSame(PHP_INT_MAX, has_action('shutdown', [RssFeed::class, 'save_revision']));
+
+        \Mockery::resetContainer();
+        Functions\when('get_lastpostmodified')->justReturn('2026-10-19 10:01:00');
+        Functions\expect('update_option')->once()->with('teksttv_rss_modified', strtotime('2026-10-19 10:01:01 GMT'), false)->andReturn(true);
+        RssFeed::save_revision();
+    }
+
+    public function test_revision_goes_past_the_current_second_after_older_writes(): void
+    {
+        Functions\when('get_lastpostmodified')->justReturn('2026-10-01 12:00:00');
+        Functions\expect('update_option')->once()->with('teksttv_rss_modified', strtotime('2026-10-19 10:00:01 GMT'), false)->andReturn(true);
+        RssFeed::invalidate();
+        RssFeed::save_revision();
+    }
+
+    /** @return array<string, array{string, string}> */
+    public static function servedSeconds(): array
+    {
+        return [
+            'after a post save in the same second' => ['2026-10-19 10:00:00', '2026-10-19 10:00:00'],
+            'at local midnight' => ['2026-10-18 22:00:00', '2026-10-01 12:00:00'],
+        ];
+    }
+
+    /** A response, then a write in that same second, must not leave conditional requests matching. */
+    #[DataProvider('servedSeconds')]
+    public function test_write_in_the_served_second_advances_the_validator(string $now_gmt, string $core_gmt): void
+    {
+        $stored = 0;
+        $now = strtotime($now_gmt . ' GMT');
+        Functions\when('TekstTV\\time')->justReturn($now);
+        Functions\when('current_datetime')->justReturn((new \DateTimeImmutable('@' . $now))->setTimezone(new \DateTimeZone('Europe/Amsterdam')));
+        Functions\when('is_feed')->justReturn(true);
+        Functions\when('get_option')->alias(function ($key, $default = false) use (&$stored) {
+            return match ($key) {
+                'teksttv_features' => $this->features,
+                'teksttv_max_post_age' => $this->max_age,
+                'teksttv_rss_modified' => $stored,
+                default => $default,
+            };
+        });
+        Functions\when('update_option')->alias(function ($key, $value) use (&$stored) {
+            $stored = $value;
+            return true;
+        });
+        Functions\when('get_lastpostmodified')->justReturn($core_gmt);
+
+        $served = RssFeed::last_modified($core_gmt, 'GMT');
+        $this->assertSame($now_gmt, $served);
+        RssFeed::invalidate();
+        RssFeed::save_revision();
+        $this->assertGreaterThan($served, RssFeed::last_modified($core_gmt, 'GMT'));
+    }
+
+    public function test_shutdown_writes_the_revision_of_each_changed_site(): void
+    {
+        $current = 2;
+        Functions\when('get_current_blog_id')->alias(function () use (&$current) {
+            return $current;
+        });
+        RssFeed::invalidate();
+        $current = 1;
+        RssFeed::invalidate();
+
+        $written = [];
+        Functions\when('get_lastpostmodified')->justReturn(false);
+        Functions\when('switch_to_blog')->alias(function ($id) use (&$current) {
+            $current = $id;
+            return true;
+        });
+        Functions\when('restore_current_blog')->alias(function () use (&$current) {
+            $current = 1;
+            return true;
+        });
+        Functions\when('update_option')->alias(function ($key, $value) use (&$current, &$written) {
+            $written[] = $current;
+            return true;
+        });
+        RssFeed::save_revision();
+        $this->assertSame([2, 1], $written);
+        $this->assertSame(1, $current);
+    }
+
+    /** @return array<string, array{string, string, string, bool}> */
+    public static function transitions(): array
+    {
+        return [
+            'update of a published post' => ['post', 'publish', 'publish', true],
+            'publication' => ['post', 'publish', 'draft', true],
+            'unpublication' => ['post', 'trash', 'publish', true],
+            'draft autosave' => ['post', 'draft', 'draft', false],
+            'revision' => ['revision', 'inherit', 'new', false],
+            'published page' => ['page', 'publish', 'publish', false],
+            'force delete of a published post' => ['post', 'delete', 'publish', true],
+            'force delete of a draft' => ['post', 'delete', 'draft', false],
+        ];
+    }
+
+    #[DataProvider('transitions')]
+    public function test_post_transitions_invalidate_only_for_published_posts(string $type, string $new, string $old, bool $invalidates): void
+    {
+        $this->post->post_type = $type;
+        RssFeed::post_transitioned($new, $old, $this->post);
+        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
+    }
+
+    /** @return array<string, array{string, string, bool}> */
+    public static function termChanges(): array
+    {
+        return [
+            'category of a published post' => ['category', 'publish', true],
+            'tag of a published post' => ['post_tag', 'publish', true],
+            'category of a draft' => ['category', 'draft', false],
+            'other taxonomy' => ['region', 'publish', false],
+        ];
+    }
+
+    #[DataProvider('termChanges')]
+    public function test_term_changes_of_published_posts_invalidate(string $taxonomy, string $status, bool $invalidates): void
+    {
+        Functions\when('get_post_type')->justReturn('post');
+        Functions\when('get_post_status')->justReturn($status);
+        RssFeed::terms_changed(42, $taxonomy);
+        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
+    }
+
+    public function test_force_deletes_are_hooked(): void
+    {
+        RssFeed::init();
+        $this->assertNotFalse(has_action('before_delete_post'));
+    }
+
+    public function test_feed_options_are_hooked_but_unrelated_ones_are_not(): void
+    {
+        RssFeed::init();
+        foreach (['teksttv_features', 'teksttv_max_post_age', 'timezone_string', 'gmt_offset'] as $option) {
+            foreach (['add_option_', 'update_option_', 'delete_option_'] as $prefix) {
+                $this->assertNotFalse(has_action($prefix . $option, [RssFeed::class, 'invalidate']), $prefix . $option);
+            }
+        }
+        $this->assertFalse(has_action('update_option_blogname', [RssFeed::class, 'invalidate']));
+    }
+
+    /** @return array<string, array{string, bool}> */
+    public static function metaKeys(): array
+    {
+        return [
+            'TekstTV field' => ['_teksttv_title', true],
+            'featured image' => ['_thumbnail_id', true],
+            'primary category' => ['_yoast_wpseo_primary_category', true],
+            'attachment metadata' => ['_wp_attachment_metadata', true],
+            'attachment file' => ['_wp_attached_file', true],
+            'category image' => ['_teksttv_category_image', true],
+            'AI suggestion' => ['_teksttv_ai_title', false],
+            'unrelated' => ['_edit_lock', false],
+        ];
+    }
+
+    #[DataProvider('metaKeys')]
+    public function test_meta_changes_invalidate_only_for_exported_keys(string $key, bool $invalidates): void
+    {
+        RssFeed::meta_changed(['7'], 42, $key);
+        $this->assertSame($invalidates, has_action('shutdown', [RssFeed::class, 'save_revision']) !== false);
     }
 }
