@@ -136,7 +136,8 @@ class Helpers
     public static function sanitize_date_input(mixed $raw): string
     {
         $date = sanitize_text_field((string) $raw);
-        if ($date === '') {
+        // DateTime rejects NUL bytes with a ValueError.
+        if ($date === '' || str_contains($date, "\0")) {
             return '';
         }
 

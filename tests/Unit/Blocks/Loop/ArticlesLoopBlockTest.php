@@ -4,6 +4,7 @@ namespace TekstTV\Tests\Unit\Blocks\Loop;
 
 use Brain\Monkey\Functions;
 use PHPUnit\Framework\Attributes\DataProvider;
+use TekstTV\ArticleContent;
 use TekstTV\Blocks\Loop\ArticlesLoopBlock;
 use TekstTV\Tests\Unit\TestCase;
 
@@ -76,7 +77,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with('teksttv_features', \Mockery::any())
             ->andReturn(['page_separator']);
 
-        $result = ArticlesLoopBlock::split_pages('<p>Hello world</p>');
+        $result = ArticleContent::split_pages('<p>Hello world</p>');
         $this->assertSame(['<p>Hello world</p>'], $result);
     }
 
@@ -86,7 +87,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with('teksttv_features', \Mockery::any())
             ->andReturn(['page_separator']);
 
-        $result = ArticlesLoopBlock::split_pages('<p>Page one</p><p>---</p><p>Page two</p>');
+        $result = ArticleContent::split_pages('<p>Page one</p><p>---</p><p>Page two</p>');
         $this->assertCount(2, $result);
         $this->assertSame('<p>Page one</p>', $result[0]);
         $this->assertSame('<p>Page two</p>', $result[1]);
@@ -98,7 +99,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with('teksttv_features', \Mockery::any())
             ->andReturn(['page_separator']);
 
-        $result = ArticlesLoopBlock::split_pages('<p>One</p><p>-----</p><p>Two</p>');
+        $result = ArticleContent::split_pages('<p>One</p><p>-----</p><p>Two</p>');
         $this->assertCount(2, $result);
     }
 
@@ -108,7 +109,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with('teksttv_features', \Mockery::any())
             ->andReturn(['page_separator']);
 
-        $result = ArticlesLoopBlock::split_pages('<p>---</p><p>Only page</p><p>---</p>');
+        $result = ArticleContent::split_pages('<p>---</p><p>Only page</p><p>---</p>');
         $this->assertCount(1, $result);
         $this->assertSame('<p>Only page</p>', $result[0]);
     }
@@ -120,7 +121,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->andReturn([]);
 
         $content = '<p>Page one</p><p>---</p><p>Page two</p>';
-        $result = ArticlesLoopBlock::split_pages($content);
+        $result = ArticleContent::split_pages($content);
         $this->assertCount(1, $result);
         $this->assertSame($content, $result[0]);
     }
@@ -131,7 +132,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with('teksttv_features', \Mockery::any())
             ->andReturn(['page_separator']);
 
-        $this->assertSame([], ArticlesLoopBlock::split_pages(''));
+        $this->assertSame([], ArticleContent::split_pages(''));
     }
 
     public function test_split_pages_whitespace_only(): void
@@ -140,7 +141,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with('teksttv_features', \Mockery::any())
             ->andReturn(['page_separator']);
 
-        $this->assertSame([], ArticlesLoopBlock::split_pages('   '));
+        $this->assertSame([], ArticleContent::split_pages('   '));
     }
 
     public function test_split_pages_with_plain_text_separator(): void
@@ -149,7 +150,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with('teksttv_features', \Mockery::any())
             ->andReturn(['page_separator']);
 
-        $result = ArticlesLoopBlock::split_pages("Page one\n---\nPage two");
+        $result = ArticleContent::split_pages("Page one\n---\nPage two");
         $this->assertCount(2, $result);
         $this->assertSame('Page one', $result[0]);
         $this->assertSame('Page two', $result[1]);
@@ -161,7 +162,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with('teksttv_features', \Mockery::any())
             ->andReturn(['page_separator']);
 
-        $this->assertSame(['foo---bar'], ArticlesLoopBlock::split_pages('foo---bar'));
+        $this->assertSame(['foo---bar'], ArticleContent::split_pages('foo---bar'));
     }
 
     public function test_sidebar_image_override_with_explicit_none(): void
@@ -171,7 +172,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with(1, '_teksttv_sidebar_image', true)
             ->andReturn('0');
 
-        $result = ArticlesLoopBlock::get_sidebar_image_data(1);
+        $result = ArticleContent::get_sidebar_image_data(1);
         $this->assertNull($result);
     }
 
@@ -182,7 +183,7 @@ class ArticlesLoopBlockTest extends TestCase
             ->with(1, '_teksttv_sidebar_image', true)
             ->andReturn(0);
 
-        $result = ArticlesLoopBlock::get_sidebar_image_data(1);
+        $result = ArticleContent::get_sidebar_image_data(1);
         $this->assertNull($result);
     }
 
@@ -198,7 +199,7 @@ class ArticlesLoopBlockTest extends TestCase
             return $tag === 'teksttv_image_url' ? $value : '';
         });
 
-        $result = ArticlesLoopBlock::get_sidebar_image_data(1);
+        $result = ArticleContent::get_sidebar_image_data(1);
         $this->assertSame('https://example.com/custom.jpg', $result['url']);
     }
 
@@ -219,7 +220,7 @@ class ArticlesLoopBlockTest extends TestCase
             return $tag === 'teksttv_image_url' ? $value : '';
         });
 
-        $result = ArticlesLoopBlock::get_sidebar_image_data(1);
+        $result = ArticleContent::get_sidebar_image_data(1);
         $this->assertSame('https://example.com/cat.jpg', $result['url']);
     }
 
@@ -242,7 +243,7 @@ class ArticlesLoopBlockTest extends TestCase
             return $tag === 'teksttv_image_url' ? $value : '';
         });
 
-        $result = ArticlesLoopBlock::get_sidebar_image_data(1);
+        $result = ArticleContent::get_sidebar_image_data(1);
         $this->assertSame('https://example.com/thumb.jpg', $result['url']);
     }
 
@@ -267,7 +268,7 @@ class ArticlesLoopBlockTest extends TestCase
         Functions\when('wp_get_attachment_caption')->justReturn('');
         Functions\when('apply_filters')->alias(fn($tag, $value) => $tag === 'teksttv_primary_category' ? $primary : $value);
 
-        $this->assertSame('https://example.com/77.jpg', ArticlesLoopBlock::get_sidebar_image_data(1)['url']);
+        $this->assertSame('https://example.com/77.jpg', ArticleContent::get_sidebar_image_data(1)['url']);
     }
 
     public function test_sidebar_image_ignores_corrupt_thumbnail_meta(): void
@@ -278,7 +279,7 @@ class ArticlesLoopBlockTest extends TestCase
         Functions\when('apply_filters')->returnArg(2);
         Functions\expect('get_post_thumbnail_id')->never();
 
-        $this->assertNull(ArticlesLoopBlock::get_sidebar_image_data(1));
+        $this->assertNull(ArticleContent::get_sidebar_image_data(1));
     }
 
     public function test_sidebar_image_returns_null_when_nothing_found(): void
@@ -295,7 +296,7 @@ class ArticlesLoopBlockTest extends TestCase
         Functions\expect('get_the_terms')->with(1, 'category')->andReturn(false);
         Functions\expect('get_post_thumbnail_id')->with(1)->andReturn(0);
 
-        $result = ArticlesLoopBlock::get_sidebar_image_data(1);
+        $result = ArticleContent::get_sidebar_image_data(1);
         $this->assertNull($result);
     }
 
@@ -319,7 +320,7 @@ class ArticlesLoopBlockTest extends TestCase
             };
         });
 
-        $result = ArticlesLoopBlock::get_sidebar_image_data(1);
+        $result = ArticleContent::get_sidebar_image_data(1);
         $this->assertSame('https://example.com/primary.jpg', $result['url']);
     }
 

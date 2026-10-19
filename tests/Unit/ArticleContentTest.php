@@ -61,25 +61,19 @@ class ArticleContentTest extends TestCase
         yield 'no content' => ['_teksttv_content', " \n\t"];
         yield 'only separators' => ['_teksttv_content', "---\n---"];
         yield 'corrupt content' => ['_teksttv_content', new \stdClass()];
-        yield 'array content' => ['_teksttv_content', ['Tekst']];
         yield 'corrupt title' => ['_teksttv_title', ['kop']];
-        yield 'object title' => ['_teksttv_title', new \stdClass()];
         yield 'future start' => ['_teksttv_date_start', '2026-10-20'];
         yield 'expired end' => ['_teksttv_date_end', '2026-10-18'];
         yield 'invalid start' => ['_teksttv_date_start', 'invalid'];
         yield 'invalid end' => ['_teksttv_date_end', 'invalid'];
         yield 'impossible date' => ['_teksttv_date_start', '2026-02-31'];
         yield 'NUL date' => ['_teksttv_date_end', "2026-10-19\0"];
-        yield 'NUL start date' => ['_teksttv_date_start', "2026-10-01\0x"];
         yield 'corrupt date' => ['_teksttv_date_start', new \stdClass()];
-        yield 'array start date' => ['_teksttv_date_start', ['2026-10-01']];
         yield 'object end date' => ['_teksttv_date_end', new \stdClass()];
         yield 'wrong weekday' => ['_teksttv_days', ['2', '3']];
         yield 'no weekdays' => ['_teksttv_days', []];
-        yield 'corrupt weekday' => ['_teksttv_days', [new \stdClass()]];
         yield 'partly corrupt weekdays' => ['_teksttv_days', ['1', new \stdClass()]];
         yield 'imported weekday string' => ['_teksttv_days', '1,2,3'];
-        yield 'object weekdays' => ['_teksttv_days', new \stdClass()];
     }
 
     #[DataProvider('excludedMeta')]

@@ -151,11 +151,10 @@ final class RssFeed
         }
         self::render_element('title', html_entity_decode($article['title'], ENT_QUOTES | ENT_HTML5, 'UTF-8'));
         if ($article['pages'] !== []) {
-            $body = implode("\n<hr />\n", array_map('wpautop', $article['pages']));
-            self::render_element('content', $body, true);
-            if ($article['sidebar_image'] !== null) {
-                self::render_element('image', $article['sidebar_image']['url']);
-            }
+            self::render_element('content', implode("\n<hr />\n", array_map('wpautop', $article['pages'])), true);
+        }
+        if ($article['sidebar_image'] !== null) {
+            self::render_element('image', $article['sidebar_image']['url']);
         }
         foreach ($article['images'] as $image) {
             self::render_element('extraImage', $image['url']);

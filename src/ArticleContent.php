@@ -12,7 +12,7 @@ final class ArticleContent
 
     /**
      * Prime the attachments and category image meta that active posts can show, in a fixed
-     * number of queries. Replaces the missing-attachment list used until the next call.
+     * number of queries.
      * The article query already primes post metadata and category relationships.
      *
      * @param array<mixed> $posts
@@ -26,16 +26,9 @@ final class ArticleContent
             if (!$post instanceof \WP_Post || get_post_meta($post->ID, '_teksttv_active', true) !== '1') {
                 continue;
             }
-            if (Helpers::has_feature('sidebar_image')) {
-                $image_ids[] = get_post_meta($post->ID, '_teksttv_sidebar_image', true);
-            }
-            $image_ids[] = self::thumbnail_id($post->ID);
-            $term_ids[] = self::primary_category_id($post->ID);
-            $categories = get_the_terms($post->ID, 'category');
-            foreach (is_array($categories) ? $categories : [] as $category) {
-                $term_ids[] = (int) $category->term_id;
-            }
-            array_push($image_ids, ...self::extra_image_ids($post->ID));
+            $image_ids[] = Helpers::has_feature('sidebar_image') ? get_post_meta($post->ID, '_teksttv_sidebar_image', true) : 0;
+            array_push($image_ids, self::thumbnail_id($post->ID), ...self::extra_image_ids($post->ID));
+            array_push($term_ids, ...self::category_ids($post->ID));
         }
 
         $term_ids = array_values(array_unique(array_filter($term_ids)));
@@ -59,9 +52,8 @@ final class ArticleContent
                     'post__in' => $uncached,
                     'posts_per_page' => -1,
                     'fields' => 'ids',
-                    'no_found_rows' => true,
                 ]);
-                self::$missing_images = array_fill_keys(array_diff($uncached, array_map('intval', $existing)), true);
+                self::$missing_images = array_fill_keys(array_diff($uncached, $existing), true);
             }
         }
     }
@@ -92,7 +84,7 @@ final class ArticleContent
             // days. '' days is missing meta (all days); any other non-array is malformed.
             if (
                 !self::valid_date($start) || !self::valid_date($end)
-                || ($days !== '' && (!is_array($days) || array_filter($days, 'is_scalar') !== $days))
+                || (is_array($days) ? array_filter($days, 'is_scalar') !== $days : $days !== '')
                 || !Helpers::is_block_scheduled(['date_start' => $start, 'date_end' => $end, 'days' => $days])
             ) {
                 return null;
@@ -108,10 +100,7 @@ final class ArticleContent
         $pages = self::split_pages($content);
         $images = [];
         foreach (self::extra_image_ids($post->ID) as $attachment_id) {
-            if (!is_numeric($attachment_id)) {
-                continue;
-            }
-            $image = self::image_data((int) $attachment_id, 'image_slide');
+            $image = self::image_data($attachment_id, 'image_slide');
             // A URL filter can intentionally suppress an image.
             if (!empty($image['url'])) {
                 $images[] = $image;
@@ -124,7 +113,7 @@ final class ArticleContent
 
         $sidebar = $pages !== [] ? self::get_sidebar_image_data($post->ID) : null;
         return [
-            'title' => !empty($override) ? $override : get_the_title($post),
+            'title' => $override ?: get_the_title($post),
             'pages' => $pages,
             'sidebar_image' => !empty($sidebar['url']) ? $sidebar : null,
             'images' => $images,
@@ -144,16 +133,10 @@ final class ArticleContent
         return is_string($value) ? $value : null;
     }
 
+    /** Empty or a Y-m-d date that sanitizing leaves unchanged. */
     private static function valid_date(?string $date): bool
     {
-        if ($date === null || str_contains($date, "\0")) {
-            return false;
-        }
-        if ($date === '') {
-            return true;
-        }
-        $parsed = \DateTimeImmutable::createFromFormat('!Y-m-d', $date);
-        return $parsed && $parsed->format('Y-m-d') === $date;
+        return $date !== null && Helpers::sanitize_date_input($date) === $date;
     }
 
     /**
@@ -163,24 +146,12 @@ final class ArticleContent
      */
     public static function split_pages(string $content): array
     {
-        if (!Helpers::has_feature('page_separator')) {
-            $trimmed = trim($content);
-            return $trimmed !== '' ? [$trimmed] : [];
-        }
-
-        $parts = preg_split('/<p[^>]*>\s*-{3,}\s*<\/p>|(?:^|\R)[ \t]*-{3,}[ \t]*(?=\R|$)/i', $content);
-        $pages = [];
-        foreach ($parts as $part) {
-            $part = trim($part);
-            if ($part !== '') {
-                $pages[] = $part;
-            }
-        }
-        return $pages;
+        $parts = Helpers::has_feature('page_separator') ? preg_split('/<p[^>]*>\s*-{3,}\s*<\/p>|(?:^|\R)[ \t]*-{3,}[ \t]*(?=\R|$)/i', $content) : [$content];
+        return array_values(array_filter(array_map('trim', $parts ?: []), fn($page) => $page !== ''));
     }
 
     /**
-     * Get sidebar image data for a post.
+     * Override ('0' suppresses), primary category, categories, featured image.
      *
      * @return array<string, string>|null
      */
@@ -192,57 +163,34 @@ final class ArticleContent
             if ($override_id === '0' || $override_id === 0) {
                 return null;
             }
-            // Corrupt meta (arrays, objects) counts as no override.
-            if (is_numeric($override_id) && $override_id) {
-                $data = self::image_data((int) $override_id, 'text_sidebar');
-                if ($data) {
-                    return $data;
-                }
-            }
-        }
-
-        $primary_term_id = self::primary_category_id($post_id);
-        if ($primary_term_id) {
-            $data = self::get_category_image_data($primary_term_id);
+            $data = self::image_data($override_id, 'text_sidebar');
             if ($data) {
                 return $data;
             }
         }
 
+        foreach (self::category_ids($post_id) as $term_id) {
+            $data = self::image_data(get_term_meta($term_id, '_teksttv_category_image', true), 'text_sidebar');
+            if ($data) {
+                return $data;
+            }
+        }
+
+        return self::image_data(self::thumbnail_id($post_id), 'text_sidebar');
+    }
+
+    /** @return \Generator<int, int> Primary category first; lazy, so a primary image skips get_the_terms(). */
+    private static function category_ids(int $post_id): \Generator
+    {
+        $primary = apply_filters('teksttv_primary_category', get_post_meta($post_id, '_yoast_wpseo_primary_category', true), $post_id);
+        if (is_numeric($primary) && $primary) {
+            yield (int) $primary;
+        }
         // Reuse the object-term cache primed by the caller's WP_Query.
         $categories = get_the_terms($post_id, 'category');
-        foreach (is_array($categories) ? $categories : [] as $cat) {
-            $data = self::get_category_image_data((int) $cat->term_id);
-            if ($data) {
-                return $data;
-            }
+        foreach (is_array($categories) ? $categories : [] as $category) {
+            yield (int) $category->term_id;
         }
-
-        $thumb_id = self::thumbnail_id($post_id);
-        if ($thumb_id) {
-            return self::image_data($thumb_id, 'text_sidebar');
-        }
-
-        return null;
-    }
-
-    /**
-     * @return array<string, string>|null
-     */
-    private static function get_category_image_data(int $term_id): ?array
-    {
-        $image_id = get_term_meta($term_id, '_teksttv_category_image', true);
-        if (!is_numeric($image_id) || !$image_id) {
-            return null;
-        }
-
-        return self::image_data((int) $image_id, 'text_sidebar');
-    }
-
-    private static function primary_category_id(int $post_id): int
-    {
-        $id = apply_filters('teksttv_primary_category', get_post_meta($post_id, '_yoast_wpseo_primary_category', true), $post_id);
-        return is_numeric($id) ? (int) $id : 0;
     }
 
     private static function thumbnail_id(int $post_id): int
@@ -252,11 +200,18 @@ final class ArticleContent
         return is_array($raw) || is_object($raw) ? 0 : (int) get_post_thumbnail_id($post_id);
     }
 
-    /** @return array<string, string>|null */
-    private static function image_data(int $id, string $slot): ?array
+    /**
+     * Corrupt (non-numeric) and empty IDs from meta have no image.
+     *
+     * @return array<string, string>|null
+     */
+    private static function image_data(mixed $id, string $slot): ?array
     {
-        // Filters added after priming (e.g. during rss2_head) may still resolve the ID.
-        return isset(self::$missing_images[$id]) && !self::image_filters_active() ? null : Helpers::get_image_data($id, 'large', $slot);
+        if (!is_numeric($id) || !$id) {
+            return null;
+        }
+        // Filters added after priming (e.g. during rss2_head) may still resolve a missing ID.
+        return isset(self::$missing_images[(int) $id]) && !self::image_filters_active() ? null : Helpers::get_image_data((int) $id, 'large', $slot);
     }
 
     private static function image_filters_active(): bool
