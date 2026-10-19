@@ -32,6 +32,7 @@ class ArticleContentTest extends TestCase
         Functions\when('get_post_meta')->alias(fn($id, $key) => $this->meta[$key] ?? '');
         Functions\when('current_datetime')->justReturn(new \DateTimeImmutable('2026-10-19 12:00:00', new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('wp_timezone')->justReturn(new \DateTimeZone('Europe/Amsterdam'));
+        Functions\when('get_post_datetime')->alias(fn($post) => \DateTimeImmutable::createFromFormat('Y-m-d H:i:s', $post->post_date, new \DateTimeZone('Europe/Amsterdam')));
         Functions\when('get_the_title')->justReturn('Gewone titel');
         Functions\when('get_the_terms')->justReturn(false);
         Functions\when('get_post_thumbnail_id')->justReturn(false);
@@ -113,12 +114,14 @@ class ArticleContentTest extends TestCase
         yield 'just after the cutoff' => ['2026-10-19 12:00:00', '2026-09-19 12:00:01', true];
         yield 'across the spring DST change' => ['2026-04-01 12:00:00', '2026-03-02 11:30:00', false];
         yield 'across the autumn DST change' => ['2026-11-01 12:00:00', '2026-10-02 12:30:00', true];
+        // 02:30 occurs twice on 2026-10-25; the post expires at the first and stays expired.
+        yield 'during the repeated autumn hour' => ['2026-10-25T01:00:00+00:00', '2026-09-25 02:30:00', false];
     }
 
     #[DataProvider('postAges')]
     public function test_age_cutoff_uses_calendar_days_across_dst(string $now, string $post_date, bool $eligible): void
     {
-        Functions\when('current_datetime')->justReturn(new \DateTimeImmutable($now, new \DateTimeZone('Europe/Amsterdam')));
+        Functions\when('current_datetime')->justReturn((new \DateTimeImmutable($now, new \DateTimeZone('Europe/Amsterdam')))->setTimezone(new \DateTimeZone('Europe/Amsterdam')));
         $this->post->post_date = $post_date;
         $this->assertSame($eligible, ArticleContent::prepare($this->post) !== null);
     }

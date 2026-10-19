@@ -51,17 +51,10 @@ final class RssFeed
             $timestamp = max($timestamp, $now->setTime(0, 0)->getTimestamp());
             // Age eligibility can expire within the day, without a post save.
             global $wp_query;
-            $max_age = RecentPostsQuery::max_age_days();
-            if ($max_age > 0 && $wp_query instanceof \WP_Query) {
-                foreach ($wp_query->posts as $post) {
-                    if (!$post instanceof \WP_Post) {
-                        continue;
-                    }
-                    $published = get_post_datetime($post);
-                    $expiry = $published ? $published->modify('+' . $max_age . ' days')->getTimestamp() : 0;
-                    if ($expiry <= $now->getTimestamp()) {
-                        $timestamp = max($timestamp, $expiry);
-                    }
+            foreach ($wp_query instanceof \WP_Query ? $wp_query->posts : [] as $post) {
+                $expiry = $post instanceof \WP_Post ? RecentPostsQuery::expires_at($post) : null;
+                if ($expiry !== null && $expiry <= $now->getTimestamp()) {
+                    $timestamp = max($timestamp, $expiry);
                 }
             }
         }

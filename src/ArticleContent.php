@@ -18,8 +18,9 @@ final class ArticleContent
             return null;
         }
 
-        $max_age = RecentPostsQuery::max_age_days();
-        if ($max_age > 0 && $post->post_date <= current_datetime()->modify('-' . $max_age . ' days')->format('Y-m-d H:i:s')) {
+        // An absolute instant, shared with the RSS validator, so a repeated DST hour cannot revive a post.
+        $expires = RecentPostsQuery::expires_at($post);
+        if ($expires !== null && $expires <= current_datetime()->getTimestamp()) {
             return null;
         }
 
