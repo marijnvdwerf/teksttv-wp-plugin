@@ -7,53 +7,40 @@ use TekstTV\Blocks\Common\RecentPostsQuery;
 /** Per-post TekstTV rules shared by the playout and RSS; callers choose which posts to expose. */
 final class ArticleContent
 {
-    /** @var array<int, int> Sources resolved once per query batch, including filtered IDs. */
-    private static array $primary_categories = [];
-
-    /** @var array<int, int> */
-    private static array $thumbnails = [];
-
     /** @var array<int, true> Missing attachments must not trigger a fresh lookup for each slide. */
     private static array $missing_images = [];
 
     /**
-     * Prime all attachment posts and metadata referenced by a query in bounded batches.
+     * Prime all attachment posts and metadata referenced by active posts in bounded batches.
      * The article query already primes post metadata and category relationships.
      *
-     * @param list<\WP_Post> $posts
+     * @param array<mixed> $posts
      */
     public static function prime_images(array $posts): void
     {
-        self::$primary_categories = [];
-        self::$thumbnails = [];
         self::$missing_images = [];
-        if ($posts === []) {
-            return;
-        }
-
         $image_ids = [];
         $term_ids = [];
         foreach ($posts as $post) {
+            if (!$post instanceof \WP_Post || get_post_meta($post->ID, '_teksttv_active', true) !== '1') {
+                continue;
+            }
             if (Helpers::has_feature('sidebar_image')) {
                 $image_ids[] = get_post_meta($post->ID, '_teksttv_sidebar_image', true);
             }
-            self::$thumbnails[$post->ID] = self::thumbnail_id($post->ID);
-            self::$primary_categories[$post->ID] = self::primary_category_id($post->ID);
-            $image_ids[] = self::$thumbnails[$post->ID];
-            $term_ids[] = self::$primary_categories[$post->ID];
+            $image_ids[] = self::thumbnail_id($post->ID);
+            $term_ids[] = self::primary_category_id($post->ID);
             $categories = get_the_terms($post->ID, 'category');
             foreach (is_array($categories) ? $categories : [] as $category) {
                 $term_ids[] = (int) $category->term_id;
             }
-            if (Helpers::has_feature('extra_images')) {
-                $extra = get_post_meta($post->ID, '_teksttv_images', true);
-                array_push($image_ids, ...(is_array($extra) ? $extra : []));
-            }
+            array_push($image_ids, ...self::extra_image_ids($post->ID));
         }
 
         $term_ids = array_values(array_unique(array_filter($term_ids)));
         if ($term_ids !== []) {
-            update_meta_cache('term', $term_ids);
+            // Join core's lazy queue so one query loads these and other queued terms.
+            wp_lazyload_term_meta($term_ids);
             foreach ($term_ids as $term_id) {
                 $image_ids[] = get_term_meta($term_id, '_teksttv_category_image', true);
             }
@@ -61,11 +48,7 @@ final class ArticleContent
         $image_ids = array_values(array_unique(array_map('intval', array_filter($image_ids, fn($id) => is_numeric($id) && (int) $id > 0))));
         if ($image_ids !== []) {
             _prime_post_caches($image_ids, false, true);
-            foreach ($image_ids as $id) {
-                if (!wp_cache_get($id, 'posts')) {
-                    self::$missing_images[$id] = true;
-                }
-            }
+            self::$missing_images = array_fill_keys(_get_non_cached_ids($image_ids, 'posts'), true);
         }
     }
 
@@ -105,8 +88,7 @@ final class ArticleContent
 
         $pages = self::split_pages($content);
         $images = [];
-        $attachment_ids = Helpers::has_feature('extra_images') ? get_post_meta($post->ID, '_teksttv_images', true) : [];
-        foreach (is_array($attachment_ids) ? $attachment_ids : [] as $attachment_id) {
+        foreach (self::extra_image_ids($post->ID) as $attachment_id) {
             if (!is_numeric($attachment_id)) {
                 continue;
             }
@@ -128,6 +110,13 @@ final class ArticleContent
             'sidebar_image' => !empty($sidebar['url']) ? $sidebar : null,
             'images' => $images,
         ];
+    }
+
+    /** @return list<mixed> Saved order; string keys from corrupt meta are dropped. */
+    private static function extra_image_ids(int $post_id): array
+    {
+        $ids = Helpers::has_feature('extra_images') ? get_post_meta($post_id, '_teksttv_images', true) : [];
+        return is_array($ids) ? array_values($ids) : [];
     }
 
     private static function string_meta(int $post_id, string $key): ?string
@@ -233,18 +222,12 @@ final class ArticleContent
 
     private static function primary_category_id(int $post_id): int
     {
-        if (isset(self::$primary_categories[$post_id])) {
-            return self::$primary_categories[$post_id];
-        }
         $id = apply_filters('teksttv_primary_category', get_post_meta($post_id, '_yoast_wpseo_primary_category', true), $post_id);
         return is_numeric($id) ? (int) $id : 0;
     }
 
     private static function thumbnail_id(int $post_id): int
     {
-        if (isset(self::$thumbnails[$post_id])) {
-            return self::$thumbnails[$post_id];
-        }
         // Core casts _thumbnail_id to int, which warns for corrupt arrays and objects.
         $raw = get_post_meta($post_id, '_thumbnail_id', true);
         return is_array($raw) || is_object($raw) ? 0 : (int) get_post_thumbnail_id($post_id);

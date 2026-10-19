@@ -125,24 +125,9 @@ its channel taxonomy, count and deduplication rules and includes
 password-protected published posts; RSS follows the requested WordPress feed
 and never exposes TekstTV fields for password-protected posts.
 
-Image posts and metadata are primed once per feed or playout query batch,
-including custom sidebar, primary/category and featured images. Missing
-attachments are remembered for the batch. Output remains identical with cold
-and warm caches. The `attachment-cache` WordPress integration test exercises
-5 and 20 articles, each with a sidebar, two extra images and one missing image,
-without a persistent object cache. Measured SQL queries, including priming:
-
-| Caller | Articles | Before | After |
-| --- | ---: | ---: | ---: |
-| RSS | 5 | 45 | 2 |
-| RSS | 20 | 175 | 2 |
-| Playout | 5 | 43 | 5 |
-| Playout | 20 | 162 | 4 |
-
-Playout numbers include its article query; RSS starts with the queried posts.
-These measurements start with the article and category metadata cached. The
-test also clears category metadata and enforces at most six queries for either caller, checking complete
-image output and identical cold/warm output hashes.
+Attachment posts, their metadata and category images are primed once per feed
+or playout query batch, so image queries do not grow with the number of
+articles. `tests/e2e/attachment-cache.spec.ts` enforces this.
 
 Poll the feed regularly and replace the imported TekstTV data for each returned
 item: if its TekstTV fields disappear, remove that item's imported TekstTV

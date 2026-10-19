@@ -11,16 +11,18 @@ defined('ABSPATH') || exit;
 update_option('teksttv_features', [...Helpers::DEFAULT_FEATURES, 'rss_feed']);
 $results = [];
 $created_posts = [];
-$created_terms = [];
+$created_terms = ['category' => [], 'post_tag' => []];
 $original_age = get_option('teksttv_max_post_age', 30);
 update_option('teksttv_max_post_age', 0);
 try {
     foreach ([5, 20] as $count) {
         $group = wp_insert_term('Attachment benchmark ' . $count, 'category')['term_id'];
+        $tag = wp_insert_term('Attachment benchmark ' . $count, 'post_tag')['term_id'];
         $post_ids = [];
         $image_ids = [];
-        $term_ids = [$group];
-        $created_terms[] = $group;
+        $term_ids = [$group, $tag];
+        $created_terms['category'][] = $group;
+        $created_terms['post_tag'][] = $tag;
         for ($i = 0; $i < $count; $i++) {
             $images = [];
             for ($j = 0; $j < 3; $j++) {
@@ -33,7 +35,7 @@ try {
             }
             $id = wp_insert_post([
                 'post_title' => 'Benchmark ' . $count . ' ' . $i, 'post_status' => 'publish',
-                'post_category' => [$group],
+                'post_category' => [$group], 'tags_input' => $i % 2 === 0 ? [$tag] : [],
                 'meta_input' => [
                     '_teksttv_active' => '1', '_teksttv_content' => 'Benchmark body',
                     '_teksttv_images' => [$images[1], $images[2], 999999 + $i],
@@ -50,7 +52,7 @@ try {
                 wp_set_post_categories($id, [$group, $term]);
                 update_term_meta($term, '_teksttv_category_image', $images[0]);
                 $term_ids[] = $term;
-                $created_terms[] = $term;
+                $created_terms['category'][] = $term;
                 if ($i % 4 === 1) {
                     update_post_meta($id, '_yoast_wpseo_primary_category', $term);
                 }
@@ -59,18 +61,12 @@ try {
         foreach (['rss', 'playout'] as $caller) {
             foreach ([true, false] as $cold) {
                 ArticleContent::prime_images([]);
+                // The query queues its category and tag term meta for lazy loading.
                 $query = new WP_Query(['post__in' => $post_ids, 'posts_per_page' => 50, 'no_found_rows' => true]);
-                update_object_term_cache($post_ids, 'post');
-                // Resolve lazy term loads before measuring, like a populated main query.
-                foreach ($term_ids as $term_id) {
-                    get_term_meta($term_id, '_teksttv_category_image', true);
-                    if ($cold) {
-                        wp_cache_delete($term_id, 'term_meta');
-                    }
-                }
-                foreach ($cold ? $image_ids : [] as $image_id) {
-                    wp_cache_delete($image_id, 'posts');
-                    wp_cache_delete($image_id, 'post_meta');
+                if ($cold) {
+                    wp_cache_delete_multiple($term_ids, 'term_meta');
+                    wp_cache_delete_multiple($image_ids, 'posts');
+                    wp_cache_delete_multiple($image_ids, 'post_meta');
                 }
                 $start = $wpdb->num_queries;
                 if ($caller === 'rss') {
@@ -103,8 +99,10 @@ try {
     foreach ($created_posts as $id) {
         wp_delete_post($id, true);
     }
-    foreach ($created_terms as $id) {
-        wp_delete_term($id, 'category');
+    foreach ($created_terms as $taxonomy => $ids) {
+        foreach ($ids as $id) {
+            wp_delete_term($id, $taxonomy);
+        }
     }
     BuildContext::reset();
 }
